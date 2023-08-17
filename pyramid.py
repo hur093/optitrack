@@ -118,10 +118,12 @@ class CameraOptimizer:
         self.CAMERA_RADIUS = cam_r
         self.verbose = verbose
         self.N_CAMERAS = n_cameras
+        self.rho = None
         self.cameras = None
         self.set_random_cameras()
         return
     def set_random_cameras(self) -> None:
+        self.rho = None
         params = np.random.rand(self.N_CAMERAS, 4)
         params[:, 0] = (self.X_RANGE[1]-self.X_RANGE[0])*params[:, 0]+self.X_RANGE[0] #scaling in x direction
         params[:, 1] = (self.Y_RANGE[1]-self.Y_RANGE[0])*params[:, 1]+self.Y_RANGE[0] #scaling in y direction
@@ -170,6 +172,22 @@ class CameraOptimizer:
         result = np.sum(mask_seen_by_three)/n_points
         if verbose: print(f'The cameras see {100*result:.1f}% of points')
         return 1 - result
+
+    def train(self, rho=4.0, verbose=False) -> None:
+        self.rho = rho
+        pass
+
+    def save(self, path:str) -> None: #UNTESTED
+        metadata = np.array([self.FOV_H, self.FOV_V, self.X_RANGE[0], self.X_RANGE[1], self.Y_RANGE[0], self.Y_RANGE[1], self.Z_RANGE[0], self.Z_RANGE[1], self.N_CAMERAS, self.CAMERA_RADIUS, self.rho if self.rho else np.NaN])
+        if self.rho: metadata.append(self.rho)
+        np.savez_compressed(path, cameras=self.cameras, metadata=metadata)
+        return
+    
+    def load(self, path:str) -> None: #UNTESTED
+        data = np.load(path)
+        self.FOV_H, self.FOV_V, self.X_RANGE, self.Y_RANGE, self.Z_RANGE, self.N_CAMERAS, self.CAMERA_RADIUS, self.rho = data['metadata']
+        self.cameras = data['cameras']
+        return
 
 FOV_H = np.deg2rad(56)
 FOV_V = np.deg2rad(46)
