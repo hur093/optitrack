@@ -13,6 +13,26 @@ import cma
 np.random.seed(0)
 np.set_printoptions(precision=3, suppress=True)
 
+
+def symmetric_params2regular_params(camera_params:np.ndarray, symmetry:str) -> np.ndarray:
+    if symmetry=='square':
+        result = np.zeros(4*len(camera_params))
+        for i in range(0, len(camera_params), 4):
+            result[4*i+0:4*i+4] = camera_params[i:i+4] * np.array((1, 1, 1, 1), dtype=int)
+            result[4*i+4:4*i+8] = camera_params[i:i+4] * np.array((1, -1, 1, -1), dtype=int)
+            result[4*i+8:4*i+12] = camera_params[i:i+4] * np.array((-1, 1, -1, 1), dtype=int)
+            result[4*i+12:4*i+16] = camera_params[i:i+4] * np.array((-1, -1, -1, -1), dtype=int)
+        return result
+    elif symmetry=='circle':
+        result = np.zeros(2*len(camera_params))
+        for i in range(0, len(camera_params), 4):
+            result[2*i+0:2*i+4] = camera_params[i:i+4] * np.array((1, 1, 1, 1), dtype=int)
+            result[2*i+4:2*i+8] = camera_params[i:i+4] * np.array((-1, -1, -1, -1), dtype=int)
+        return result
+    else:
+        raise Exception(f"Incorrect symmetry parameter: {symmetry}")
+
+
 class Camera:
     '''
     Class describing a camera, positioned arbitrarily with a predifined height.
@@ -120,7 +140,6 @@ class CameraOptimizer:
         self.N_CAMERAS = n_cameras
         self.rho = None
         self.cameras = None
-        self.set_random_cameras()
         return
     
     def help(self) -> None:
@@ -137,7 +156,6 @@ class CameraOptimizer:
     
     def fitness(self, cameras_arr=None, rho=4.0, verbose=False) -> float:
         """
-        KNOWN PROBLEM: VISUALISING NOT-SEEN POINTS CAN BECOME A MESS
         One possible fitness function for measuring the quality of the placement of the cameras. This was relatively easy to implement, however the measured space is of constant size (so maximum space needs to be manually checked for any number of cameras AND if the space is too large, there is a lot of unnecessary calculations) and convexity of the seen space is not taken into account.
         NOTE: fitness should return np.NaN when cameras are too close
 
@@ -178,7 +196,7 @@ class CameraOptimizer:
         if verbose: print(f'The cameras see {100*result:.1f}% of points')
         return 1 - result
 
-    def train(self, rho=4.0, dummy=True) -> None:
+    def train(self, rho=4.0, dummy=False) -> None:
         self.rho = rho
         sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
         args = (rho, False)
@@ -202,9 +220,8 @@ class CameraOptimizer:
         self.cameras = data['cameras']
         return
 
-class WeightedOptimizer(CameraOptimizer): #UNTESTED
+class WeightedOptimizer(CameraOptimizer):
     def __init__(self, weights, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:int=0, verbose:bool=False) -> None:
-        super().__init__(fov, dims, n_cameras, cam_r, verbose)
         assert type(weights)==dict, "weights must be a dictionary with possible keys: 'distance_from_origin', 'stay_within_range', 'spread', 'soft_convexity', 'hard_convexity'.\nForm more info, call WeightedOptimizer.help()"
         self.weights = {}
         self.weights['distance_from_origin'] = weights.get('distance_from_origin', -1.0)
@@ -213,6 +230,7 @@ class WeightedOptimizer(CameraOptimizer): #UNTESTED
         self.weights['soft_convexity'] = weights.get('soft_convexity', -1.0)
         self.weights['hard_convexity'] = weights.get('hard_convexity', -1.0)
         self.hull_fail_counter = 0
+        super().__init__(fov, dims, n_cameras, cam_r, verbose)
         return
     
     def help(self):
@@ -343,19 +361,108 @@ class WeightedOptimizer(CameraOptimizer): #UNTESTED
         return
 
 
+class SymmetricOptimizer(CameraOptimizer):
+    def __init__(self, symmetry, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:int=0, verbose:bool=False) -> None:
+        assert type(symmetry)==str, "symmetry parameter must be a string"
+        assert symmetry=='circle' or symmetry=='square', "Possible values for symmetry parameter are 'circle' and 'square'"
+        if symmetry=='circle':
+            if n_cameras%2 != 0:
+                print(f"Number of cameras must be divisible by 2. Changing number of cameras to {n_cameras - n_cameras%2}")
+            n_free_cams = n_cameras // 2
+        if symmetry=='square':
+            if n_cameras%4 != 0:
+                print(f"Number of cameras must be divisible by 4. Changing number of cameras to {n_cameras - n_cameras%4}")
+            n_free_cams = n_cameras // 4
+        if n_free_cams==0: raise Exception("Number of cameras is too low for this symmetry parameter.")
+        self.symmetry = symmetry
+        super(SymmetricOptimizer, self).__init__(fov, dims, n_free_cams, cam_r, verbose)
+        return
+    
+    def fitness(self, cameras_arr=None, rho=4.0, verbose=False) -> float:
+        super().fitness(symmetric_params2regular_params(self.cameras if cameras_arr is None else cameras_arr, self.symmetry), rho, verbose)
+
+    def save(self, path:str) -> None:
+        metadata = np.array([self.FOV_H, self.FOV_V, self.X_RANGE[0], self.X_RANGE[1], self.Y_RANGE[0], self.Y_RANGE[1], self.Z_RANGE[0], self.Z_RANGE[1], self.N_CAMERAS, self.CAMERA_RADIUS, self.rho if self.rho else np.NaN])
+        np.savez_compressed(path, symmetry=self.symmetry, cameras=self.cameras, metadata=metadata)
+        return
+    
+    def load(self, path:str) -> None:
+        data = np.load(path)
+        self.symmetry = data['symmetry']
+        self.FOV_H, self.FOV_V = data['metadata'][0:2]
+        self.X_RANGE, self.Y_RANGE, self.Z_RANGE = tuple(data['metadata'][2:4]), tuple(data['metadata'][4:6]), tuple(data['metadata'][6:8])
+        self.ALL_RANGE = self.X_RANGE+self.Y_RANGE+self.Z_RANGE
+        self.N_CAMERAS = data['metadata'][8]
+        self.CAMERA_RADIUS = data['metadata'][9]
+        self.rho = data['metadata'][10]
+        self.cameras = data['cameras']
+        return
+
+class WeightedSymmetricOptimizer(WeightedOptimizer):
+    def __init__(self, weights, symmetry, fov: Tuple[float], dims: Tuple[float], n_cameras: int, cam_r: int = 0, verbose: bool = False) -> None:
+        assert type(symmetry)==str, "symmetry parameter must be a string"
+        assert symmetry=='circle' or symmetry=='square', "Possible values for symmetry parameter are 'circle' and 'square'"
+        if symmetry=='circle':
+            if n_cameras%2 != 0:
+                print(f"Number of cameras must be divisible by 2. Changing number of cameras to {n_cameras - n_cameras%2}")
+            n_free_cams = n_cameras // 2
+        if symmetry=='square':
+            if n_cameras%4 != 0:
+                print(f"Number of cameras must be divisible by 4. Changing number of cameras to {n_cameras - n_cameras%4}")
+            n_free_cams = n_cameras // 4
+        if n_free_cams==0: raise Exception("Number of cameras is too low for this symmetry parameter.")
+        self.symmetry = symmetry
+        super().__init__(weights, fov, dims, n_free_cams, cam_r, verbose)
+        return
+    
+    def fitness(self, cameras_arr=None, rho=4.0, verbose=False) -> float:
+        super().fitness(symmetric_params2regular_params(self.cameras if cameras_arr is None else cameras_arr, self.symmetry), rho, verbose)
+
+    def save(self, path:str) -> None:
+        dfo_strength, dfo_curve = self.weights['distance_from_origin'] if type(self.weights['distance_from_origin'])==tuple else (self.weights['distance_from_origin'], 1.0)
+        weights = np.array([dfo_strength, dfo_curve, self.weights['stay_within_range'], self.weights['spread'], self.weights['soft_convexity'], self.weights['hard_convexity']])
+        metadata = np.array([self.FOV_H, self.FOV_V, self.X_RANGE[0], self.X_RANGE[1], self.Y_RANGE[0], self.Y_RANGE[1], self.Z_RANGE[0], self.Z_RANGE[1], self.N_CAMERAS, self.CAMERA_RADIUS, self.rho if self.rho else np.NaN, self.hull_fail_counter])
+        np.savez_compressed(path, weights=weights, symmetry=self.symmetry, cameras=self.cameras, metadata=metadata)
+        return
+
+    def load(self, path:str) -> None:
+        data = np.load(path)
+
+        self.symmetry = data['symmetry']
+
+        self.weights = {}
+        self.weights['distance_from_origin'] = tuple(data['weights'][0:2])
+        self.weights['stay_within_range'] = data['weights'][2]
+        self.weights['spread'] = data['weights'][3]
+        self.weights['soft_convexity'] = data['weights'][4]
+        self.weights['hard_convexity'] = data['weights'][5]
+
+        self.FOV_H, self.FOV_V = data['metadata'][0:2]
+        self.X_RANGE, self.Y_RANGE, self.Z_RANGE = tuple(data['metadata'][2:4]), tuple(data['metadata'][4:6]), tuple(data['metadata'][6:8])
+        self.ALL_RANGE = self.X_RANGE+self.Y_RANGE+self.Z_RANGE
+        self.N_CAMERAS = data['metadata'][8]
+        self.CAMERA_RADIUS = data['metadata'][9]
+        self.rho = data['metadata'][10]
+        self.hull_fail_counter = data['metadata'][11]
+
+        self.cameras = data['cameras']
+        return
+
+
 FOV_H = np.deg2rad(56)
 FOV_V = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
 X_LEN, Y_LEN = 5., 7.5 #meters
-N_CAMERAS = 5
-CAM_SIZE = 0.3 # upper limit measured is about 30 cm
+N_CAMERAS = 6
+CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 
 weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
 
 
-optim = WeightedOptimizer(weights, (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+optim = WeightedSymmetricOptimizer(weights, 'circle', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
 optim.set_random_cameras()
+print(symmetric_params2regular_params(optim.cameras, 'square').reshape((-1, 4)))
 optim.train(dummy=False)
-optim.save('test_save.npz')
-optim.fitness(verbose=True)
+# optim.fitness(verbose=True)
+# optim.save('test_save.npz')
 # optim.load('test_save.npz')
