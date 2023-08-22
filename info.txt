@@ -87,11 +87,32 @@ A súlyozatlan kijavított megoldás szögei 7 kamerára (fokban):
  [ -66.225   67.521]]
 
 08.08.
-start git repo and sync it to github using existing code
-redrakas{
+start git repo and sync it to github using existing code✅️
+rendrakas{
 the optimization functionality and its functions should be wrapped inside a CameraOptimizer class
 incorporate as many external functions as possible into the Camera class; what is left should start with an underscore
 file handling should be as automatic as possible: create a function to save and load best_vectors along with its metadata: weights, symmetry, rho, ranges, n_cameras. I should be able to give an arbitrary filename to the saved file. It should also be able to create a results folder
 }
 minigula a kamerakra, ami mutatja hogy hova neznek (az abrazolo fuggvenyt kell modositani)
 ellenorizd a gyanusan jo eredmenyt (1 optimalizalt kamera 4 fele tukrozve)
+
+08.18
+problem with inharitance:
+c inherits from a, b
+c calls a
+a calls super(intending root)
+c calling a calling super calls b, which is not the intended behaviour
+I want c calling a calling root
+❌️
+
+
+
+for now, sym2reg will be a global function
+Weighted optimizer stays the same✅️
+symmetric inherits from CamOptim and overwrites
+    init to cut the number of cameras and set sym parameter✅️
+    fitness to call sym2reg before calling CamOptim✅️
+
+WSOptim inherits form WeiOptim and overwrites
+    init to cut the...
+    fitness to call...

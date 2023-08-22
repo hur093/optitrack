@@ -15,6 +15,9 @@ np.set_printoptions(precision=3, suppress=True)
 
 
 def symmetric_params2regular_params(camera_params:np.ndarray, symmetry:str) -> np.ndarray:
+    """
+    
+    """
     if symmetry=='square':
         result = np.zeros(4*len(camera_params))
         for i in range(0, len(camera_params), 4):
@@ -43,16 +46,16 @@ class Camera:
         yaw (float): yaw angle of the camera in degrees
     '''
     def __init__(self, coords:tuple, pitch:float, yaw:float) -> None:
-        assert type(coords)==tuple and len(coords)==2, "Wrong format for coords"
+        assert type(coords)==tuple and len(coords)==3, "Wrong format for coords"
         self.pitch = pitch
         self.yaw = yaw
         # calculate and store vertices in a dictionary
         self.vertices_d = {}
-        self.vertices_d['E'] = np.array([coords[0], coords[1], HEIGHT])
-        self.vertices_d['A'] = np.array((self.vertices_d['E'][0] - HEIGHT*np.tan(FOV_H/2 - self.pitch), self.vertices_d['E'][1] - HEIGHT*np.tan(FOV_V/2 - self.yaw), 0))
-        self.vertices_d['B'] = np.array((self.vertices_d['E'][0] + HEIGHT*np.tan(FOV_H/2 + self.pitch), self.vertices_d['E'][1] - HEIGHT*np.tan(FOV_V/2 - self.yaw), 0))
-        self.vertices_d['C'] = np.array((self.vertices_d['E'][0] - HEIGHT*np.tan(FOV_H/2 - self.pitch), self.vertices_d['E'][1] + HEIGHT*np.tan(FOV_V/2 + self.yaw), 0))
-        self.vertices_d['D'] = np.array((self.vertices_d['E'][0] + HEIGHT*np.tan(FOV_H/2 + self.pitch), self.vertices_d['E'][1] + HEIGHT*np.tan(FOV_V/2 + self.yaw), 0))
+        self.vertices_d['E'] = np.array([coords[0], coords[1], coords[2]])
+        self.vertices_d['A'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(FOV_H/2 - self.pitch), self.vertices_d['E'][1] - coords[2]*np.tan(FOV_V/2 - self.yaw), 0))
+        self.vertices_d['B'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(FOV_H/2 + self.pitch), self.vertices_d['E'][1] - coords[2]*np.tan(FOV_V/2 - self.yaw), 0))
+        self.vertices_d['C'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(FOV_H/2 - self.pitch), self.vertices_d['E'][1] + coords[2]*np.tan(FOV_V/2 + self.yaw), 0))
+        self.vertices_d['D'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(FOV_H/2 + self.pitch), self.vertices_d['E'][1] + coords[2]*np.tan(FOV_V/2 + self.yaw), 0))
         # store vertices in a matrix
         self.vertices_m = np.zeros((5, 3))
         for idx, key in enumerate(self.vertices_d):
@@ -168,14 +171,14 @@ class CameraOptimizer:
         assert len(cameras_arr)%4==0
         assert len(self.ALL_RANGE)==6, "self.ALL_RANGE must be a tuple with length 6"
         x_min, x_max, y_min, y_max, z_min, z_max = self.ALL_RANGE
-        cameras_l = []
+        camera_objects = []
         for i in range(0, len(cameras_arr), 4):# build cameras
-            cameras_l.append(Camera((cameras_arr[i+0], cameras_arr[i+1]), cameras_arr[i+2], cameras_arr[i+3]))
-        n_cams = len(cameras_l)
+            camera_objects.append(Camera((cameras_arr[i+0], cameras_arr[i+1], z_max), cameras_arr[i+2], cameras_arr[i+3]))
+        n_cams = len(camera_objects)
         if self.CAMERA_RADIUS>0:# enforce that cameras are not to be too close to one another
             for i in range(n_cams-1):
                 for j in range(i+1, n_cams):
-                    if np.linalg.norm(cameras_l[i].vertices_d['E']-cameras_l[j].vertices_d['E']) < 2*CAM_SIZE:
+                    if np.linalg.norm(camera_objects[i].vertices_d['E']-camera_objects[j].vertices_d['E']) < 2*CAM_SIZE:
                         if verbose: print("solution rejected: cameras too close")
                         return np.NaN
         # generate test-points
@@ -186,7 +189,7 @@ class CameraOptimizer:
         test_point_set = np.stack((xx.reshape(-1), yy.reshape(-1), zz.reshape(-1)), axis=1)
         # every row of mask_mat corresponds to a camera and every column to a test-point if i_th camera sees j_th point then mask_mat[i, j]==True
         mask_mat = np.zeros((n_cams, n_points), dtype=bool)
-        for cam_idx, cam in enumerate(cameras_l):
+        for cam_idx, cam in enumerate(camera_objects):
             assert type(cam)==Camera, "All element of 'cameras' must be of type 'Camera'"
             mask_mat[cam_idx, :] = cam.peekaboo(test_point_set)
         mask_seen_by_three = np.zeros(n_points, dtype=bool)
@@ -242,14 +245,14 @@ class WeightedOptimizer(CameraOptimizer):
         assert len(cameras_arr)%4==0
         assert len(self.ALL_RANGE)==6, "self.ALL_RANGE must be a tuple with length 6"
         x_min, x_max, y_min, y_max, z_min, z_max = self.ALL_RANGE
-        cameras_l = []
+        camera_objects = []
         for i in range(0, len(cameras_arr), 4):# build cameras
-            cameras_l.append(Camera((cameras_arr[i+0], cameras_arr[i+1]), cameras_arr[i+2], cameras_arr[i+3]))
-        n_cams = len(cameras_l)
+            camera_objects.append(Camera((cameras_arr[i+0], cameras_arr[i+1], z_max), cameras_arr[i+2], cameras_arr[i+3]))
+        n_cams = len(camera_objects)
         if self.CAMERA_RADIUS>0:# enforce that cameras are not to be too close to one another
             for i in range(n_cams-1):
                 for j in range(i+1, n_cams):
-                    if np.linalg.norm(cameras_l[i].vertices_d['E']-cameras_l[j].vertices_d['E']) < 2*CAM_SIZE:
+                    if np.linalg.norm(camera_objects[i].vertices_d['E']-camera_objects[j].vertices_d['E']) < 2*CAM_SIZE:
                         if verbose: print("solution rejected: cameras too close")
                         return np.NaN
         # generate test-points
@@ -260,7 +263,7 @@ class WeightedOptimizer(CameraOptimizer):
         test_point_set = np.stack((xx.reshape(-1), yy.reshape(-1), zz.reshape(-1)), axis=1)
         # every row of mask_mat corresponds to a camera and every column to a test-point if i_th camera sees j_th point then mask_mat[i, j]==True
         mask_mat = np.zeros((n_cams, n_points), dtype=bool)
-        for cam_idx, cam in enumerate(cameras_l):
+        for cam_idx, cam in enumerate(camera_objects):
             assert type(cam)==Camera, "All element of 'cameras' must be of type 'Camera'"
             mask_mat[cam_idx, :] = cam.peekaboo(test_point_set)
         mask_seen_by_three = np.zeros(n_points, dtype=bool)
@@ -415,8 +418,120 @@ class WeightedSymmetricOptimizer(WeightedOptimizer):
         super().__init__(weights, fov, dims, n_free_cams, cam_r, verbose)
         return
     
-    def fitness(self, cameras_arr=None, rho=4.0, verbose=False) -> float:
-        super().fitness(symmetric_params2regular_params(self.cameras if cameras_arr is None else cameras_arr, self.symmetry), rho, verbose)
+    def fitness1(self, camera_params:np.ndarray, rho:float, verbose=False) -> float:
+        minimize = True
+        axes_limits = self.ALL_RANGE
+        weighing_dict = self.weights
+        symmetry = self.symmetry
+        assert len(camera_params)%4==0
+        assert len(axes_limits)==6, "axes_limits must be a tuple with length 6"
+        assert weighing_dict is not None, "weighing dict parameter must be given"
+        camera_params = symmetric_params2regular_params(camera_params, symmetry)
+        x_min, x_max, y_min, y_max, z_min, z_max = axes_limits
+        cameras = []
+        for i in range(0, len(camera_params), 4):
+            # build cameras
+            cameras.append(Camera((camera_params[i+0], camera_params[i+1]), camera_params[i+2], camera_params[i+3]))
+        n_cams = len(cameras)
+        if weighing_dict['stay_within_range']>=0:
+            x_min, x_max, y_min, y_max = (1+weighing_dict['stay_within_range'])*np.array(axes_limits[:-2])
+            assert np.allclose(np.zeros(2), np.array((x_min+x_max, y_min+y_max))), "The 'stay_within_range' funcitonality assumes that the origin of the x-y plane is at (0, 0)"
+            for cam in cameras:
+                if not (np.logical_and(x_min<cam.vertices_m[:, 0], cam.vertices_m[:, 0]<x_max).all() and np.logical_and(y_min<cam.vertices_m[:, 1], cam.vertices_m[:, 1]<y_max).all()):
+                    return np.NaN
+            x_min, x_max, y_min, y_max, z_min, z_max = axes_limits
+        assert x_min<x_max and y_min<y_max and z_min<z_max, "minimum values must be strictly smaller than maximum values"
+        if minimize:# if training (minimize=True), enforce that cameras are not to be too close to one another
+            for i in range(n_cams-1):
+                for j in range(i+1, n_cams):
+                    if np.linalg.norm(cameras[i].vertices_d['E']-cameras[j].vertices_d['E']) < 2*CAM_SIZE:
+                        if verbose: print("solution rejected: cameras too close")
+                        return np.NaN
+        # generate test-points
+        xx, yy, zz = np.meshgrid(np.linspace(x_min, x_max, int(rho*(x_max-x_min))),
+                                np.linspace(y_min, y_max, int(rho*(y_max-y_min))),
+                                np.linspace(z_min, z_max, int(rho*(z_max-z_min))))
+        n_points = np.prod(xx.shape)
+        test_point_set = np.stack((xx.reshape(-1), yy.reshape(-1), zz.reshape(-1)), axis=1)
+        # every row of mask_mat corresponds to a camera and every column to a test-point if i_th camera sees j_th point then mask_mat[i, j]==True
+        mask_mat = np.zeros((n_cams, n_points), dtype=bool)
+        for cam_idx, cam in enumerate(cameras):
+            assert type(cam)==Camera, "All element of 'cameras' must be of type 'Camera'"
+            mask_mat[cam_idx, :] = cam.peekaboo(test_point_set)
+        mask_seen_by_three = np.zeros(n_points, dtype=bool)
+        for idx in range(n_points):
+            mask_seen_by_three[idx] = np.sum(mask_mat[:, idx])>=3 #mask_seen_by_three is a n_points long vector of bools, where a True value in the ith position means it was seen by at least 3 cameras
+
+        result = 0
+        max_result = 0
+        # weigh each point according to how far it is from the origin
+        # a: how strongly this weighing should be considered within the point-by-point basis weights; b: how strongly should proximity to origin be favored
+        if type(weighing_dict['distance_from_origin']) == float:
+            if weighing_dict['distance_from_origin']>0:
+                a = weighing_dict['distance_from_origin']
+                b = 1
+                weights = 1/(1 + b*np.linalg.norm(test_point_set, axis=1))
+                result += a * np.sum(weights*mask_seen_by_three)/np.sum(weights) 
+                max_result += a
+        elif type(weighing_dict['distance_from_origin']) == tuple:
+            if np.all(np.array(weighing_dict['distance_from_origin'])>0):
+                assert len(weighing_dict['distance_from_origin'])==2, "If the distance form origin parameter is a tuple, it must be of length 2."
+                a, b = weighing_dict['distance_from_origin']
+                weights = 1/(1 + b*np.linalg.norm(test_point_set, axis=1))
+                result += a * np.sum(weights*mask_seen_by_three)/np.sum(weights) 
+                max_result += a
+        else: raise Exception("Distance form origin parameter must be a float or a tuple of length 2.")
+
+        # couldn't figure out a way to normalise spread, therefore this functionality will break the 0-1 range of the fitness funciton. To somehow make it still scale by the space, I divide by the x and y size of the space
+        if weighing_dict['spread']>0:
+            cam_positions = np.zeros((n_cams, 2))
+            for i in range(n_cams):# build cameras
+                cam_positions[i, 0] = camera_params[4*i]
+                cam_positions[i, 1] = camera_params[4*i+1]
+            centroid = np.mean(cam_positions, axis=0)
+            distances = np.linalg.norm(np.stack((cam_positions[:, 0]-centroid[0], cam_positions[:, 1]-centroid[1])), axis=0)
+            max_distance_sum = (x_max-x_min)*(y_max-y_min) #not really the maximum spread, but this value should at least scale with the space
+            result += weighing_dict['spread'] * np.sum(distances)/max_distance_sum
+            max_result += weighing_dict['spread']
+
+        if weighing_dict['soft_convexity'] > 0 or weighing_dict['hard_convexity'] > 0:
+            test_points_seen = test_point_set[mask_seen_by_three]
+            try:
+                hull = ConvexHull(test_points_seen)
+            except:
+                # print('Convex hull could not be computed')
+                # HULL_FAIL = HULL_FAIL + 1
+                return np.NaN
+            triangulation = Delaunay(test_points_seen[hull.vertices])
+            mask_inside_hull = triangulation.find_simplex(test_point_set) >= 0 #mask for points inside the hull
+            n_points_in_hull_not_seen = np.sum(np.logical_and(mask_inside_hull, ~mask_seen_by_three))
+            n_seen = np.sum(mask_seen_by_three)
+            convexity_ratio = n_seen/(n_seen+n_points_in_hull_not_seen)
+            assert 0 <= convexity_ratio <= 1, "Something is not right: convexity ratio out of range"
+            # soft convexity
+            if weighing_dict['soft_convexity'] > 0:
+                result += weighing_dict['soft_convexity']*convexity_ratio
+                max_result += weighing_dict['soft_convexity']
+            # hard convexity
+            if weighing_dict['hard_convexity'] > 0:
+                assert weighing_dict['hard_convexity'] < 1, "hard_convexity parameter must be strictly less than 1.0 (ideally below 0.95)"
+                if convexity_ratio < weighing_dict['hard_convexity']: return np.NaN #reject every solution that is below the hard limit
+
+        if verbose: print(f'The cameras see {100*np.sum(mask_seen_by_three)/n_points:.1f}% of points')
+
+        # every weghing parameter is turned off
+        if max_result == 0:
+            result = np.sum(mask_seen_by_three)/n_points
+            max_result = 1
+        
+        return 1 - result/max_result if minimize else result/max_result
+
+    def train(self, rho=4.0, dummy=False) -> None:
+        self.rho = rho
+        sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
+        args = (rho, False)
+        self.cameras, es = cma.fmin2(self.fitness1, x0=self.cameras, sigma0=sigma, args=args)
+        return
 
     def save(self, path:str) -> None:
         dfo_strength, dfo_curve = self.weights['distance_from_origin'] if type(self.weights['distance_from_origin'])==tuple else (self.weights['distance_from_origin'], 1.0)
@@ -453,16 +568,17 @@ FOV_H = np.deg2rad(56)
 FOV_V = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
 X_LEN, Y_LEN = 5., 7.5 #meters
-N_CAMERAS = 6
+N_CAMERAS = 7
 CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 
 weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
 
 
 optim = WeightedSymmetricOptimizer(weights, 'circle', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
-optim.set_random_cameras()
-print(symmetric_params2regular_params(optim.cameras, 'square').reshape((-1, 4)))
-optim.train(dummy=False)
-# optim.fitness(verbose=True)
+# optim.set_random_cameras()
+# optim.train()
 # optim.save('test_save.npz')
-# optim.load('test_save.npz')
+optim.load('test_save.npz')
+optim.fitness(verbose=True)
+# np.save('export.npy', optim.cameras)
+print("Done!")
