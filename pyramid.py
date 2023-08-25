@@ -128,7 +128,6 @@ class Camera:
         result = np.logical_and(result, theta[0]*points[:, 0] + theta[1]*points[:, 1] + theta[2]*points[:, 2] + theta[3] > 0)
         return np.logical_and(result, points[:, 2]>=0)
 
-
 class CameraOptimizer:
     def __init__(self, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:int=0, verbose:bool=False) -> None:
         assert len(fov)==2, "fov must be a tuple of length 2: (FOV_horizontal, FOV_vertical), given in radiand"
@@ -217,7 +216,7 @@ class CameraOptimizer:
         self.FOV_H, self.FOV_V = data['metadata'][0:2]
         self.X_RANGE, self.Y_RANGE, self.Z_RANGE = tuple(data['metadata'][2:4]), tuple(data['metadata'][4:6]), tuple(data['metadata'][6:8])
         self.ALL_RANGE = self.X_RANGE+self.Y_RANGE+self.Z_RANGE
-        self.N_CAMERAS = data['metadata'][8]
+        self.N_CAMERAS = int(data['metadata'][8])
         self.CAMERA_RADIUS = data['metadata'][9]
         self.rho = data['metadata'][10]
         self.cameras = data['cameras']
@@ -355,14 +354,13 @@ class WeightedOptimizer(CameraOptimizer):
         self.FOV_H, self.FOV_V = data['metadata'][0:2]
         self.X_RANGE, self.Y_RANGE, self.Z_RANGE = tuple(data['metadata'][2:4]), tuple(data['metadata'][4:6]), tuple(data['metadata'][6:8])
         self.ALL_RANGE = self.X_RANGE+self.Y_RANGE+self.Z_RANGE
-        self.N_CAMERAS = data['metadata'][8]
+        self.N_CAMERAS = int(data['metadata'][8])
         self.CAMERA_RADIUS = data['metadata'][9]
         self.rho = data['metadata'][10]
         self.hull_fail_counter = data['metadata'][11]
 
         self.cameras = data['cameras']
         return
-
 
 class SymmetricOptimizer(CameraOptimizer):
     def __init__(self, symmetry, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:int=0, verbose:bool=False) -> None:
@@ -395,7 +393,7 @@ class SymmetricOptimizer(CameraOptimizer):
         self.FOV_H, self.FOV_V = data['metadata'][0:2]
         self.X_RANGE, self.Y_RANGE, self.Z_RANGE = tuple(data['metadata'][2:4]), tuple(data['metadata'][4:6]), tuple(data['metadata'][6:8])
         self.ALL_RANGE = self.X_RANGE+self.Y_RANGE+self.Z_RANGE
-        self.N_CAMERAS = data['metadata'][8]
+        self.N_CAMERAS = int(data['metadata'][8])
         self.CAMERA_RADIUS = data['metadata'][9]
         self.rho = data['metadata'][10]
         self.cameras = data['cameras']
@@ -555,7 +553,7 @@ class WeightedSymmetricOptimizer(WeightedOptimizer):
         self.FOV_H, self.FOV_V = data['metadata'][0:2]
         self.X_RANGE, self.Y_RANGE, self.Z_RANGE = tuple(data['metadata'][2:4]), tuple(data['metadata'][4:6]), tuple(data['metadata'][6:8])
         self.ALL_RANGE = self.X_RANGE+self.Y_RANGE+self.Z_RANGE
-        self.N_CAMERAS = data['metadata'][8]
+        self.N_CAMERAS = int(data['metadata'][8])
         self.CAMERA_RADIUS = data['metadata'][9]
         self.rho = data['metadata'][10]
         self.hull_fail_counter = data['metadata'][11]
@@ -574,11 +572,19 @@ CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
 
 
-optim = WeightedSymmetricOptimizer(weights, 'circle', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+# optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+optim = CameraOptimizer(2*(0,), 3*(0,), 0)
 # optim.set_random_cameras()
 # optim.train()
-# optim.save('test_save.npz')
-optim.load('test_save.npz')
-optim.fitness(verbose=True)
-# np.save('export.npy', optim.cameras)
+# optim.save('results/vanilla_7.npz')
+optim.load('results/vanilla_7.npz')
+# optim.fitness(verbose=True)
+
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d')
+
+plot_axes(ax, optim)
+optim.plot_cameras(ax)
+plt.show()
+
 print("Done!")
