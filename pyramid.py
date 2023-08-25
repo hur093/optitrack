@@ -8,6 +8,7 @@ import os
 from time import time
 from typing import Tuple
 import numpy as np, matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from scipy.spatial import ConvexHull, Delaunay
 import cma
 np.random.seed(0)
@@ -99,6 +100,30 @@ class Camera:
         ax.scatter(self.vertices_m[:, 0], self.vertices_m[:, 1], self.vertices_m[:, 2], color=color, alpha=alpha)
         for idx, key in enumerate(self.vertices_d):
             ax.text(self.vertices_m[idx, 0], self.vertices_m[idx, 1], self.vertices_m[idx, 2], key)
+        # plot triangles showing the direction of the camera
+        # collect vectors for the triangles
+        triangle_sidelength = 0.7
+        a_vec = self.vertices_d['A'] - self.vertices_d['E']
+        a_vec = a_vec / np.linalg.norm(a_vec)
+        b_vec = self.vertices_d['B'] - self.vertices_d['E']
+        b_vec = b_vec / np.linalg.norm(b_vec)
+        c_vec = self.vertices_d['C'] - self.vertices_d['E']
+        c_vec = c_vec / np.linalg.norm(c_vec)
+        d_vec = self.vertices_d['D'] - self.vertices_d['E']
+        d_vec = d_vec / np.linalg.norm(d_vec)
+        # plot the triangles
+        verts = np.zeros((4, 3, 3))
+        for idx in range(4): verts[idx, 0, :] = self.vertices_d['E']
+        verts[0, 1, :] = self.vertices_d['E'] + triangle_sidelength*a_vec
+        verts[0, 2, :] = self.vertices_d['E'] + triangle_sidelength*b_vec
+        verts[1, 1, :] = self.vertices_d['E'] + triangle_sidelength*a_vec
+        verts[1, 2, :] = self.vertices_d['E'] + triangle_sidelength*c_vec
+        verts[2, 1, :] = self.vertices_d['E'] + triangle_sidelength*d_vec
+        verts[2, 2, :] = self.vertices_d['E'] + triangle_sidelength*b_vec
+        verts[3, 1, :] = self.vertices_d['E'] + triangle_sidelength*d_vec
+        verts[3, 2, :] = self.vertices_d['E'] + triangle_sidelength*c_vec
+        ax.add_collection3d(Poly3DCollection(verts, alpha=0.5, linewidths=0.5, edgecolors='k'))
+        return
 
     def plot_plane(self, plane:str, ax, alpha=0.2) -> None:
         assert type(plane)==str and len(plane)==3, "Wrong format for plane"
@@ -637,8 +662,13 @@ fig = plt.figure()
 ax = fig.add_subplot(projection='3d')
 
 plot_axes(ax, optim)
-optim.plot_cameras(ax)
+# optim.plot_cameras(ax)
 # optim.plot_seen_points(ax)
+cam_idx = 4
+cam = Camera((optim.cameras[cam_idx+0], optim.cameras[cam_idx+1], optim.Z_RANGE[1]), optim.cameras[cam_idx+2], optim.cameras[cam_idx+3])
+cam2 = Camera((1.2, -0.5, 3), np.deg2rad(-25), np.deg2rad(15))
+cam.plot_vertices(ax)
+cam2.plot_vertices(ax)
 plt.show()
 
 print("Done!")
