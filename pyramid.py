@@ -222,6 +222,40 @@ class CameraOptimizer:
         self.cameras = data['cameras']
         return
 
+    def plot_cameras(self, ax) -> None:
+        cameras = []
+        for i in range(0, 4*self.N_CAMERAS, 4):
+            cameras.append(Camera((self.cameras[i+0], self.cameras[i+1], self.Z_RANGE[1]), self.cameras[i+2], self.cameras[i+3]))
+        for c in cameras:
+            c.plot_vertices(ax, color='blue')
+        return
+    
+    def plot_seen_points(self, ax, rho=4.0, color='black') -> None:
+        cameras = []
+        for i in range(0, 4*self.N_CAMERAS, 4): cameras.append(Camera((self.cameras[i+0], self.cameras[i+1], self.Z_RANGE[1]), self.cameras[i+2], self.cameras[i+3]))
+
+        x_min, x_max = self.X_RANGE
+        y_min, y_max = self.Y_RANGE
+        z_min, z_max = self.Z_RANGE
+        xx, yy, zz = np.meshgrid(np.linspace(x_min, x_max, int(rho*(x_max-x_min))),
+                                np.linspace(y_min, y_max, int(rho*(y_max-y_min))),
+                                np.linspace(z_min, z_max, int(rho*(z_max-z_min))))
+        n_points = np.prod(xx.shape)
+        test_point_set = np.stack((xx.reshape(-1), yy.reshape(-1), zz.reshape(-1)), axis=1)
+
+        mask_mat = np.zeros((self.N_CAMERAS, n_points), dtype=bool)
+        for cam_idx, cam in enumerate(cameras):
+            mask_mat[cam_idx, :] = cam.peekaboo(test_point_set)
+        mask_seen_by_three = np.zeros(n_points, dtype=bool)
+        for idx in range(n_points):
+            mask_seen_by_three[idx] = np.sum(mask_mat[:, idx])>=3 #mask_seen_by_three is a n_points long vector of bools, where a True value in the ith position means it was seen by at least 3 cameras
+
+        ax.scatter(test_point_set[mask_seen_by_three, 0], test_point_set[mask_seen_by_three, 1], test_point_set[mask_seen_by_three, 2], color=color, alpha=0.2)
+        # ax.scatter(test_point_set[~mask_seen_by_three, 0], test_point_set[~mask_seen_by_three, 1], test_point_set[~mask_seen_by_three, 2], color='yellow', alpha=0.1) # too messy
+        return
+
+
+
 class WeightedOptimizer(CameraOptimizer):
     def __init__(self, weights, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:int=0, verbose:bool=False) -> None:
         assert type(weights)==dict, "weights must be a dictionary with possible keys: 'distance_from_origin', 'stay_within_range', 'spread', 'soft_convexity', 'hard_convexity'.\nForm more info, call WeightedOptimizer.help()"
@@ -562,6 +596,25 @@ class WeightedSymmetricOptimizer(WeightedOptimizer):
         return
 
 
+def plot_axes(ax, optim:CameraOptimizer) -> None:
+    ax.plot(optim.X_RANGE, [0, 0], [0, 0], color='red')
+    ax.plot([0, 0], optim.Y_RANGE, [0, 0], color='green')
+    ax.plot([0, 0], [0, 0], optim.Z_RANGE, color='blue')
+    ax.xaxis.label.set_color('red')
+    ax.yaxis.label.set_color('green')
+    ax.zaxis.label.set_color('blue')
+    ax.set_xlabel('x-axis')
+    ax.set_ylabel('y-axis')
+    ax.set_zlabel('z-axis')
+    xmin, xmax = optim.X_RANGE
+    ax.set_xlim3d(xmin, xmax)
+    ymin, ymax = optim.Y_RANGE
+    ax.set_ylim3d(ymin, ymax)
+    zmin, zmax = optim.Z_RANGE
+    ax.set_zlim3d(zmin, zmax)
+    ax.set_title('Pyramid')
+    return
+
 FOV_H = np.deg2rad(56)
 FOV_V = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
@@ -585,6 +638,7 @@ ax = fig.add_subplot(projection='3d')
 
 plot_axes(ax, optim)
 optim.plot_cameras(ax)
+# optim.plot_seen_points(ax)
 plt.show()
 
 print("Done!")
