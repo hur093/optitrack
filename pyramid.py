@@ -165,6 +165,7 @@ class CameraOptimizer:
         self.CAMERA_RADIUS = cam_r
         self.verbose = verbose
         self.N_CAMERAS = n_cameras
+        self.sigma0 = 0.25 * np.array([dims[0], dims[1], np.pi, np.pi])
         self.rho = None
         self.cameras = None
         return
@@ -225,9 +226,9 @@ class CameraOptimizer:
 
     def train(self, rho=4.0) -> None:
         self.rho = rho
-        sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
+        # sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
         args = (rho, False)
-        self.cameras, es = cma.fmin2(self.fitness, x0=self.cameras, sigma0=sigma, args=args)
+        self.cameras, es = cma.fmin2(self.fitness, x0=self.cameras, sigma0=self.sigma0, args=args)
         return
 
     def save(self, path:str) -> None:
@@ -424,7 +425,6 @@ class SymmetricOptimizer(CameraOptimizer):
         # symmetry
         assert type(symmetry)==str, "symmetry parameter must be a string"
         assert symmetry=='circle' or symmetry=='square', "Possible values for symmetry parameter are 'circle' and 'square'"
-        self.factor = 2 if symmetry=='circle' else 4
         self.symmetry = symmetry
         # n_cameras
         if symmetry=='circle':
@@ -456,7 +456,6 @@ class SymmetricOptimizer(CameraOptimizer):
         return
 
     def fitness(self, cameras_arr=None, rho=4, verbose=False) -> float:
-        print('called')
         self._update()
         return super().fitness(self.cameras if cameras_arr is None else cameras_arr, rho, verbose)
 
@@ -466,10 +465,10 @@ class SymmetricOptimizer(CameraOptimizer):
         sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
         args = (rho, False)
         self.cameras_sym, es = cma.fmin2(self.fitness, x0=self.cameras_sym, sigma0=sigma, args=args)
+        self._update()
         return
 
     def save(self, path:str) -> None:
-        self._update()
         metadata = np.array([self.FOV_H, self.FOV_V, self.X_RANGE[0], self.X_RANGE[1], self.Y_RANGE[0], self.Y_RANGE[1], self.Z_RANGE[0], self.Z_RANGE[1], self.N_CAMERAS, self.CAMERA_RADIUS, self.rho if self.rho else np.NaN])
         np.savez_compressed(path, symmetry=self.symmetry, cameras=self.cameras, metadata=metadata)
         return
@@ -484,6 +483,10 @@ class SymmetricOptimizer(CameraOptimizer):
         self.CAMERA_RADIUS = data['metadata'][9]
         self.rho = data['metadata'][10]
         self.cameras = data['cameras']
+
+        self.n_cameras_sym = self.N_CAMERAS // 2 if self.symmetry=='circle' else 4
+        self.cameras_sym = self.cameras[np.array(self.n_cameras_sym*[4*[1]+4*[0]], dtype=bool).reshape(-1)] if self.symmetry=='circle' else self.cameras[np.array(self.n_cameras_sym*[4*[1]+12*[0]], dtype=bool).reshape(-1)]
+        assert np.array_equal(self.cameras, symmetric_params2regular_params(self.cameras_sym, self.symmetry)), "Error during loading"
         return
 
 class WeightedSymmetricOptimizer(WeightedOptimizer):
@@ -672,28 +675,28 @@ FOV_H = np.deg2rad(56)
 FOV_V = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
 X_LEN, Y_LEN = 5., 7.5 #meters
-N_CAMERAS = 6
+N_CAMERAS = 12
 CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 
 weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
 
 
-# optim = SymmetricOptimizer('circle', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
-optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+optim = SymmetricOptimizer('circle', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+# optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
 optim.set_random_cameras()
-optim.train()
-print(optim.fitness())
-optim.save('results/test.npz')
-# optim.load('results/test.npz')
+# optim.train()
+# optim.save('results/test.npz')
+optim.load('results/test.npz')
+print(optim.fitness(verbose=True))
 
-# fig = plt.figure()
-# ax = fig.add_subplot(projection='3d')
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d')
 
-# plot_axes(ax, optim)
-# optim.fitness(verbose=True)
-# optim.plot_cameras(ax)
+plot_axes(ax, optim)
+optim.fitness(verbose=True)
+optim.plot_cameras(ax)
 # optim.plot_seen_points(ax)
 
-# plt.show()
+plt.show()
 
 print("Done!")
