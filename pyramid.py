@@ -224,11 +224,12 @@ class CameraOptimizer:
         if verbose: print(f'The cameras see {100*result:.1f}% of points')
         return 1 - result
 
-    def train(self, rho=4.0) -> None:
+    def train(self, x0=None, rho=4.0) -> None:
         self.rho = rho
-        # sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
+        if x0 is None: x0 = self.cameras
+        sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
         args = (rho, False)
-        self.cameras, es = cma.fmin2(self.fitness, x0=self.cameras, sigma0=self.sigma0, args=args)
+        self.cameras, es = cma.fmin2(self.fitness, x0=x0, sigma0=sigma, args=args)
         return
 
     def save(self, path:str) -> None:
@@ -460,11 +461,11 @@ class SymmetricOptimizer(CameraOptimizer):
         return super().fitness(self.cameras if cameras_arr is None else cameras_arr, rho, verbose)
 
     def train(self, rho=4) -> None:
-        # super().train(rho)
-        self.rho = rho
-        sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
-        args = (rho, False)
-        self.cameras_sym, es = cma.fmin2(self.fitness, x0=self.cameras_sym, sigma0=sigma, args=args)
+        super().train(self.cameras_sym, rho)
+        # self.rho = rho
+        # sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
+        # args = (rho, False)
+        # self.cameras_sym, es = cma.fmin2(self.fitness, x0=self.cameras_sym, sigma0=sigma, args=args)
         self._update()
         return
 
@@ -684,19 +685,19 @@ weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread
 optim = SymmetricOptimizer('circle', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
 # optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
 optim.set_random_cameras()
-# optim.train()
-# optim.save('results/test.npz')
-optim.load('results/test.npz')
-print(optim.fitness(verbose=True))
-
-fig = plt.figure()
-ax = fig.add_subplot(projection='3d')
-
-plot_axes(ax, optim)
+optim.train()
+optim.save('results/test.npz')
+# optim.load('results/test.npz')
 optim.fitness(verbose=True)
-optim.plot_cameras(ax)
-# optim.plot_seen_points(ax)
 
-plt.show()
+# fig = plt.figure()
+# ax = fig.add_subplot(projection='3d')
+
+# plot_axes(ax, optim)
+# optim.fitness(verbose=True)
+# optim.plot_cameras(ax)
+# # optim.plot_seen_points(ax)
+
+# plt.show()
 
 print("Done!")
