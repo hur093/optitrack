@@ -154,7 +154,7 @@ class Camera:
         return np.logical_and(result, points[:, 2]>=0)
 
 class CameraOptimizer:
-    def __init__(self, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:int=0, verbose:bool=False) -> None:
+    def __init__(self, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:float=0., verbose:bool=False) -> None:
         assert len(fov)==2, "fov must be a tuple of length 2: (FOV_horizontal, FOV_vertical), given in radiand"
         assert len(dims)==3, "dims must be a tuple of length 3: (length, width, height), given in meters"
         assert cam_r >= 0, "cam_r must be a positive integer"
@@ -223,12 +223,11 @@ class CameraOptimizer:
         if verbose: print(f'The cameras see {100*result:.1f}% of points')
         return 1 - result
 
-    def train(self, rho=4.0, dummy=False) -> None:
+    def train(self, rho=4.0) -> None:
         self.rho = rho
         sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
         args = (rho, False)
-        if dummy: self.cameras, _ = (np.random.rand(self.N_CAMERAS*4), 12)
-        else : self.cameras, es = cma.fmin2(self.fitness, x0=self.cameras, sigma0=sigma, args=args)
+        self.cameras, es = cma.fmin2(self.fitness, x0=self.cameras, sigma0=sigma, args=args)
         return
 
     def save(self, path:str) -> None:
@@ -280,9 +279,8 @@ class CameraOptimizer:
         return
 
 
-
 class WeightedOptimizer(CameraOptimizer):
-    def __init__(self, weights, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:int=0, verbose:bool=False) -> None:
+    def __init__(self, weights, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:float=0., verbose:bool=False) -> None:
         assert type(weights)==dict, "weights must be a dictionary with possible keys: 'distance_from_origin', 'stay_within_range', 'spread', 'soft_convexity', 'hard_convexity'.\nForm more info, call WeightedOptimizer.help()"
         self.weights = {}
         self.weights['distance_from_origin'] = weights.get('distance_from_origin', -1.0)
@@ -422,26 +420,56 @@ class WeightedOptimizer(CameraOptimizer):
         return
 
 class SymmetricOptimizer(CameraOptimizer):
-    def __init__(self, symmetry, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:int=0, verbose:bool=False) -> None:
+    def __init__(self, symmetry, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:float=0., verbose:bool=False) -> None:
+        # symmetry
         assert type(symmetry)==str, "symmetry parameter must be a string"
         assert symmetry=='circle' or symmetry=='square', "Possible values for symmetry parameter are 'circle' and 'square'"
+        self.factor = 2 if symmetry=='circle' else 4
+        self.symmetry = symmetry
+        # n_cameras
         if symmetry=='circle':
             if n_cameras%2 != 0:
                 print(f"Number of cameras must be divisible by 2. Changing number of cameras to {n_cameras - n_cameras%2}")
             n_free_cams = n_cameras // 2
+            n = n_free_cams*2
         if symmetry=='square':
             if n_cameras%4 != 0:
                 print(f"Number of cameras must be divisible by 4. Changing number of cameras to {n_cameras - n_cameras%4}")
             n_free_cams = n_cameras // 4
+            n = n_free_cams*4
         if n_free_cams==0: raise Exception("Number of cameras is too low for this symmetry parameter.")
-        self.symmetry = symmetry
-        super(SymmetricOptimizer, self).__init__(fov, dims, n_free_cams, cam_r, verbose)
+        super(SymmetricOptimizer, self).__init__(fov, dims, n, cam_r, verbose)
+        self.n_cameras_sym = n_free_cams
+        # cameras
+        # self.cameras initialised by super's init
+        self.cameras_sym = None
         return
     
-    def fitness(self, cameras_arr=None, rho=4.0, verbose=False) -> float:
-        super().fitness(symmetric_params2regular_params(self.cameras if cameras_arr is None else cameras_arr, self.symmetry), rho, verbose)
+    def _update(self):
+        self.cameras = symmetric_params2regular_params(self.cameras_sym, self.symmetry)
+        return
+
+    def set_random_cameras(self) -> None:
+        super().set_random_cameras()
+        self.cameras_sym = self.cameras[:4*self.n_cameras_sym]
+        self._update()
+        return
+
+    def fitness(self, cameras_arr=None, rho=4, verbose=False) -> float:
+        print('called')
+        self._update()
+        return super().fitness(self.cameras if cameras_arr is None else cameras_arr, rho, verbose)
+
+    def train(self, rho=4) -> None:
+        # super().train(rho)
+        self.rho = rho
+        sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
+        args = (rho, False)
+        self.cameras_sym, es = cma.fmin2(self.fitness, x0=self.cameras_sym, sigma0=sigma, args=args)
+        return
 
     def save(self, path:str) -> None:
+        self._update()
         metadata = np.array([self.FOV_H, self.FOV_V, self.X_RANGE[0], self.X_RANGE[1], self.Y_RANGE[0], self.Y_RANGE[1], self.Z_RANGE[0], self.Z_RANGE[1], self.N_CAMERAS, self.CAMERA_RADIUS, self.rho if self.rho else np.NaN])
         np.savez_compressed(path, symmetry=self.symmetry, cameras=self.cameras, metadata=metadata)
         return
@@ -459,7 +487,7 @@ class SymmetricOptimizer(CameraOptimizer):
         return
 
 class WeightedSymmetricOptimizer(WeightedOptimizer):
-    def __init__(self, weights, symmetry, fov: Tuple[float], dims: Tuple[float], n_cameras: int, cam_r: int = 0, verbose: bool = False) -> None:
+    def __init__(self, weights, symmetry, fov: Tuple[float], dims: Tuple[float], n_cameras: int, cam_r:float=0., verbose:bool=False) -> None:
         assert type(symmetry)==str, "symmetry parameter must be a string"
         assert symmetry=='circle' or symmetry=='square', "Possible values for symmetry parameter are 'circle' and 'square'"
         if symmetry=='circle':
@@ -583,7 +611,7 @@ class WeightedSymmetricOptimizer(WeightedOptimizer):
         
         return 1 - result/max_result if minimize else result/max_result
 
-    def train(self, rho=4.0, dummy=False) -> None:
+    def train(self, rho=4.0) -> None:
         self.rho = rho
         sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
         args = (rho, False)
@@ -644,31 +672,28 @@ FOV_H = np.deg2rad(56)
 FOV_V = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
 X_LEN, Y_LEN = 5., 7.5 #meters
-N_CAMERAS = 7
+N_CAMERAS = 6
 CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 
 weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
 
 
-# optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
-optim = CameraOptimizer(2*(0,), 3*(0,), 0)
-# optim.set_random_cameras()
-# optim.train()
-# optim.save('results/vanilla_7.npz')
-optim.load('results/vanilla_7.npz')
+# optim = SymmetricOptimizer('circle', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+optim.set_random_cameras()
+optim.train()
+print(optim.fitness())
+optim.save('results/test.npz')
+# optim.load('results/test.npz')
+
+# fig = plt.figure()
+# ax = fig.add_subplot(projection='3d')
+
+# plot_axes(ax, optim)
 # optim.fitness(verbose=True)
-
-fig = plt.figure()
-ax = fig.add_subplot(projection='3d')
-
-plot_axes(ax, optim)
 # optim.plot_cameras(ax)
 # optim.plot_seen_points(ax)
-cam_idx = 4
-cam = Camera((optim.cameras[cam_idx+0], optim.cameras[cam_idx+1], optim.Z_RANGE[1]), optim.cameras[cam_idx+2], optim.cameras[cam_idx+3])
-cam2 = Camera((1.2, -0.5, 3), np.deg2rad(-25), np.deg2rad(15))
-cam.plot_vertices(ax)
-cam2.plot_vertices(ax)
-plt.show()
+
+# plt.show()
 
 print("Done!")
