@@ -11,7 +11,7 @@ import numpy as np, matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from scipy.spatial import ConvexHull, Delaunay
 import cma
-np.random.seed(0)
+# np.random.seed(0)
 np.set_printoptions(precision=3, suppress=True)
 
 
@@ -231,7 +231,7 @@ class CameraOptimizer:
         sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
         args = (rho, False)
         self.cameras, es = cma.fmin2(self.fitness, x0=x0, sigma0=sigma, args=args)
-        while self.fitness()>fitness_upper_limit:
+        while self.fitness()>fitness_upper_limit or self.fitness() is np.NaN:
             self.cameras, es = cma.fmin2(self.fitness, x0=x0, sigma0=sigma, args=args)
         return
 
@@ -458,6 +458,10 @@ class SymmetricOptimizer(CameraOptimizer):
         super().set_random_cameras()
         self.cameras_sym = self.cameras[:4*self.n_cameras_sym]
         self._update()
+        while self.fitness() is np.NaN:
+            super().set_random_cameras()
+            self.cameras_sym = self.cameras[:4*self.n_cameras_sym]
+            self._update()
         return
 
     def fitness(self, cameras_arr=None, rho=4, verbose=False) -> float:
@@ -465,7 +469,7 @@ class SymmetricOptimizer(CameraOptimizer):
         return super().fitness(self.cameras if cameras_arr is None else cameras_arr, rho, verbose)
 
     def train(self, rho=4.0, fitness_upper_limit=0.9) -> None:
-        while self.fitness()>fitness_upper_limit:
+        while self.fitness()>fitness_upper_limit or self.fitness() is np.NaN:
             super().train(self.cameras_sym, rho, fitness_upper_limit=1e3)
             self.cameras_sym = self.cameras
             self._update()
@@ -487,7 +491,7 @@ class SymmetricOptimizer(CameraOptimizer):
         self.rho = data['metadata'][10]
         self.cameras = data['cameras']
 
-        self.n_cameras_sym = self.N_CAMERAS // 2 if self.symmetry=='circle' else 4
+        self.n_cameras_sym = self.N_CAMERAS // (2 if self.symmetry=='circle' else 4)
         self.cameras_sym = self.cameras[np.array(self.n_cameras_sym*[4*[1]+4*[0]], dtype=bool).reshape(-1)] if self.symmetry=='circle' else self.cameras[np.array(self.n_cameras_sym*[4*[1]+12*[0]], dtype=bool).reshape(-1)]
         assert np.array_equal(self.cameras, symmetric_params2regular_params(self.cameras_sym, self.symmetry)), "Error during loading"
         return
@@ -678,27 +682,48 @@ FOV_H = np.deg2rad(56)
 FOV_V = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
 X_LEN, Y_LEN = 5., 7.5 #meters
-N_CAMERAS = 6
+N_CAMERAS = 4
 CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 
 weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
 
 
-optim = SymmetricOptimizer('circle', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+optim = SymmetricOptimizer('square', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
 # optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
 optim.set_random_cameras()
-optim.train()
-optim.save('results/sym_circle_6.npz')
+optim.cameras_sym = np.load('good_4_sym.npy')
+optim._update()
+# optim.train(fitness_upper_limit=0.4)
+# optim.save('results/test.npz')
 # optim.load('results/sym_circle_6.npz')
-optim.fitness(verbose=True)
+# optim.fitness(verbose=True)
 
-# fig = plt.figure()
-# ax = fig.add_subplot(projection='3d')
+'''Probapont mazsola'''
+probapont = np.array((0., 3.4, HEIGHT-.1)).reshape((1, 3))
+cameras = []
+camera_params = optim.cameras
+for i in range(optim.N_CAMERAS):
+    cameras.append(Camera((optim.cameras[4*i+0], optim.cameras[4*i+1], HEIGHT), optim.cameras[4*i+2], optim.cameras[4*i+3]))
 
-# plot_axes(ax, optim)
+see_it = []
+for cam in cameras:
+    see_it.append(cam.peekaboo(probapont)[0])
+print(see_it)
+cam = optim.cameras_sym
+cam[2:] = np.rad2deg(cam[2:])
+print(cam)
+# exit()
+
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d')
+
+plot_axes(ax, optim)
 # optim.plot_cameras(ax)
 # optim.plot_seen_points(ax)
 
-# plt.show()
+cameras.append(Camera((1, 1, HEIGHT), 0, 0))
+for cam in cameras:
+    cam.plot_vertices(ax)
+plt.show()
 
 print("Done!")
