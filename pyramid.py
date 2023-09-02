@@ -14,6 +14,7 @@ import cma
 # np.random.seed(0)
 np.set_printoptions(precision=3, suppress=True)
 
+EPS = 0.015
 
 def symmetric_params2regular_params(camera_params:np.ndarray, symmetry:str) -> np.ndarray:
     """
@@ -46,23 +47,26 @@ class Camera:
         pitch (float): pitch angle of the camera in radians
         yaw (float): yaw angle of the camera in radians
     '''
-    def __init__(self, coords:tuple, pitch:float, yaw:float) -> None:
+    def __init__(self, coords:tuple, tilt:Tuple[float], fov:Tuple[float]) -> None:
         assert type(coords)==tuple and len(coords)==3, "Wrong format for coords"
-        # assert -np.pi < 2*pitch+FOV_H < np.pi, "Pitch out of range"
-        # assert -np.pi < 2*yaw+FOV_V < np.pi, "Yaw out of range"
-        self.pitch = pitch
-        self.yaw = yaw
+        assert type(tilt)==tuple and len(tilt)==2, "Wrong format for tilt"
+        assert type(fov)==tuple and len(fov)==2, "Wrong format for fov"
+        self.fov_h, self.fov_v = fov[0], fov[1]
+        self.pitch, self.yaw = tilt[0], tilt[1]
+        _ = (1-EPS) * np.pi
+        assert 2*np.abs(self.pitch) < _-self.fov_h, "Pitch out of range"
+        assert 2*np.abs(self.yaw) < _-self.fov_v, "Yaw out of range"
         # calculate and store vertices in a dictionary
         self.vertices_d = {}
         self.vertices_d['E'] = np.array([coords[0], coords[1], coords[2]])
-        self.vertices_d['A'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(FOV_H/2 - self.pitch),
-                                         self.vertices_d['E'][1] - coords[2]*np.tan(FOV_V/2 - self.yaw), 0))
-        self.vertices_d['B'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(FOV_H/2 + self.pitch),
-                                         self.vertices_d['E'][1] - coords[2]*np.tan(FOV_V/2 - self.yaw), 0))
-        self.vertices_d['C'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(FOV_H/2 - self.pitch),
-                                         self.vertices_d['E'][1] + coords[2]*np.tan(FOV_V/2 + self.yaw), 0))
-        self.vertices_d['D'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(FOV_H/2 + self.pitch),
-                                         self.vertices_d['E'][1] + coords[2]*np.tan(FOV_V/2 + self.yaw), 0))
+        self.vertices_d['A'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(self.fov_h/2 - self.pitch),
+                                         self.vertices_d['E'][1] - coords[2]*np.tan(self.fov_v/2 - self.yaw), 0))
+        self.vertices_d['B'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(self.fov_h/2 + self.pitch),
+                                         self.vertices_d['E'][1] - coords[2]*np.tan(self.fov_v/2 - self.yaw), 0))
+        self.vertices_d['C'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(self.fov_h/2 - self.pitch),
+                                         self.vertices_d['E'][1] + coords[2]*np.tan(self.fov_v/2 + self.yaw), 0))
+        self.vertices_d['D'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(self.fov_h/2 + self.pitch),
+                                         self.vertices_d['E'][1] + coords[2]*np.tan(self.fov_v/2 + self.yaw), 0))
         # store vertices in a matrix
         self.vertices_m = np.zeros((5, 3))
         for idx, key in enumerate(self.vertices_d):
@@ -199,7 +203,11 @@ class CameraOptimizer:
         params = np.random.rand(self.N_CAMERAS, 4)
         params[:, 0] = (self.X_RANGE[1]-self.X_RANGE[0])*params[:, 0]+self.X_RANGE[0] #scaling in x direction
         params[:, 1] = (self.Y_RANGE[1]-self.Y_RANGE[0])*params[:, 1]+self.Y_RANGE[0] #scaling in y direction
-        params[:, 2:] = np.pi*params[:, 2:]-np.pi/2 #scaling the angles
+        mypi = (1-EPS) * np.pi
+        angle_range_h =  (-mypi/2+self.FOV_H/2, mypi/2-self.FOV_H/2)
+        angle_range_v =  (-mypi/2+self.FOV_V/2, mypi/2-self.FOV_V/2)
+        params[:, 2] = (angle_range_h[1]-angle_range_h[0])*params[:, 2]+angle_range_h[0] #scaling the pitch angles
+        params[:, 3] = (angle_range_v[1]-angle_range_v[0])*params[:, 3]+angle_range_v[0] #scaling the yaw angles
         self.cameras = params.reshape(-1)
         return
     
@@ -219,7 +227,7 @@ class CameraOptimizer:
         x_min, x_max, y_min, y_max, z_min, z_max = self.ALL_RANGE
         camera_objects = []
         for i in range(0, len(cameras_arr), 4):# build cameras
-            camera_objects.append(Camera((cameras_arr[i+0], cameras_arr[i+1], z_max), cameras_arr[i+2], cameras_arr[i+3]))
+            camera_objects.append(Camera((cameras_arr[i+0], cameras_arr[i+1], z_max), (cameras_arr[i+2], cameras_arr[i+3]), (self.FOV_H, self.FOV_V)))
         n_cams = len(camera_objects)
         if self.CAMERA_RADIUS>0:# enforce that cameras are not to be too close to one another
             for i in range(n_cams-1):
@@ -275,15 +283,14 @@ class CameraOptimizer:
 
     def plot_cameras(self, ax) -> None:
         cameras = []
-        for i in range(0, 4*self.N_CAMERAS, 4):
-            cameras.append(Camera((self.cameras[i+0], self.cameras[i+1], self.Z_RANGE[1]), self.cameras[i+2], self.cameras[i+3]))
+        for i in range(0, 4*self.N_CAMERAS, 4): cameras.append(Camera((self.cameras[i+0], self.cameras[i+1], self.Z_RANGE[1]), (self.cameras[i+2], self.cameras[i+3]), (self.FOV_H, self.FOV_V)))
         for c in cameras:
             c.plot_vertices(ax, color='blue')
         return
     
     def plot_seen_points(self, ax, rho=4.0, color='black') -> None:
         cameras = []
-        for i in range(0, 4*self.N_CAMERAS, 4): cameras.append(Camera((self.cameras[i+0], self.cameras[i+1], self.Z_RANGE[1]), self.cameras[i+2], self.cameras[i+3]))
+        for i in range(0, 4*self.N_CAMERAS, 4): cameras.append(Camera((self.cameras[i+0], self.cameras[i+1], self.Z_RANGE[1]), (self.cameras[i+2], self.cameras[i+3]), (self.FOV_H, self.FOV_V)))
 
         x_min, x_max = self.X_RANGE
         y_min, y_max = self.Y_RANGE
@@ -330,7 +337,7 @@ class WeightedOptimizer(CameraOptimizer):
         x_min, x_max, y_min, y_max, z_min, z_max = self.ALL_RANGE
         camera_objects = []
         for i in range(0, len(cameras_arr), 4):# build cameras
-            camera_objects.append(Camera((cameras_arr[i+0], cameras_arr[i+1], z_max), cameras_arr[i+2], cameras_arr[i+3]))
+            camera_objects.append(Camera((cameras_arr[i+0], cameras_arr[i+1], z_max), (cameras_arr[i+2], cameras_arr[i+3]), (self.FOV_H, self.FOV_V)))
         n_cams = len(camera_objects)
         if self.CAMERA_RADIUS>0:# enforce that cameras are not to be too close to one another
             for i in range(n_cams-1):
@@ -548,7 +555,7 @@ class WeightedSymmetricOptimizer(WeightedOptimizer):
         cameras = []
         for i in range(0, len(camera_params), 4):
             # build cameras
-            cameras.append(Camera((camera_params[i+0], camera_params[i+1]), camera_params[i+2], camera_params[i+3]))
+            cameras.append(Camera((camera_params[i+0], camera_params[i+1], self.Z_RANGE[1]), (camera_params[i+2], camera_params[i+3]), (self.FOV_H, self.FOV_V)))
         n_cams = len(cameras)
         if weighing_dict['stay_within_range']>=0:
             x_min, x_max, y_min, y_max = (1+weighing_dict['stay_within_range'])*np.array(axes_limits[:-2])
@@ -700,8 +707,8 @@ def plot_axes(ax, optim:CameraOptimizer) -> None:
     ax.set_title('Pyramid')
     return
 
-FOV_H = np.deg2rad(56)
-FOV_V = np.deg2rad(46)
+hfov = np.deg2rad(56)
+vfov = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
 X_LEN, Y_LEN = 5., 7.5 #meters
 N_CAMERAS = 7
@@ -709,43 +716,24 @@ CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 
 weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
 
+max_tilt, min_tilt = 0, 0
+optim = CameraOptimizer((hfov, vfov), (X_LEN, Y_LEN, HEIGHT), 10)
+for i in range(100):
+    optim.set_random_cameras()
+    max_tilt = max(max_tilt, np.max(optim.cameras.reshape((-1, 4))[:, 2]))
+    min_tilt = min(min_tilt, np.min(optim.cameras.reshape((-1, 4))[:, 2]))
 
-# optim = SymmetricOptimizer('square', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
-optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
-# optim.set_random_cameras()
-# optim.train()
-# optim.save('results/test.npz')
-optim.load('results/test.npz')
-# optim.fitness(verbose=True)
-cameras_params = optim.cameras
-cameras = []
-for i in range(optim.N_CAMERAS):
-    cameras.append(Camera((cameras_params[4*i+0], cameras_params[4*i+1], HEIGHT), cameras_params[4*i+2], cameras_params[4*i+3]))
+print(np.rad2deg((hfov/2+max_tilt)/(1-EPS)))
+print(np.rad2deg((-hfov/2+min_tilt)/(1-EPS)))
 
-mycam = cameras[3]
-yaw = -cameras[3].yaw - np.deg2rad(20)
-print(f"Yaw is {-np.rad2deg(yaw):.1f} degrees")
-d_x_coords = []
-pitch_degs = []
-fig = plt.figure()
-for idx, pitch in enumerate(np.linspace(0, mycam.pitch, 100)):
-    mycam = Camera(tuple(mycam.vertices_d['E']), pitch, yaw)
-    # if idx==75 or idx==76: print(np.rad2deg(pitch))
-    # print('{:.2f}'.format(mycam.vertices_d['D'][0]), end=', ')
-    d_x_coords.append(mycam.vertices_d['D'][0])
-    pitch_degs.append(np.rad2deg(pitch))
-    '''Plotting'''
-    ax = fig.add_subplot(projection='3d')
+# mycam = Camera((0.5, 1.5, HEIGHT), (np.deg2rad(60), np.deg2rad(-65)), (FOV_H, FOV_V))
 
-    plot_axes(ax, CameraOptimizer((0, 0), (4*X_LEN, 4*Y_LEN, HEIGHT), 0, 0))
-    mycam.plot_vertices(ax)
-    mycam.plot_faces(ax)
+# fig = plt.figure()
+# ax = fig.add_subplot(projection='3d')
 
-    ax.view_init(elev=66, azim=-90)
-    plt.pause(0.2)
-    # plt.savefig(f"frames/{idx:03d}")
-    fig.clear()
+# plot_axes(ax, CameraOptimizer((0, 0), (4*X_LEN, 4*Y_LEN, HEIGHT), 0, 0))
+# mycam.plot_faces(ax)
 
-plt.show()
+# plt.show()
 
 print("Done!")
