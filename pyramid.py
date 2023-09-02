@@ -43,20 +43,26 @@ class Camera:
 
     Attributes:
         coords (tuple): (x, y) coordinates of the camera
-        pitch (float): pitch angle of the camera in degrees
-        yaw (float): yaw angle of the camera in degrees
+        pitch (float): pitch angle of the camera in radians
+        yaw (float): yaw angle of the camera in radians
     '''
     def __init__(self, coords:tuple, pitch:float, yaw:float) -> None:
         assert type(coords)==tuple and len(coords)==3, "Wrong format for coords"
+        # assert -np.pi < 2*pitch+FOV_H < np.pi, "Pitch out of range"
+        # assert -np.pi < 2*yaw+FOV_V < np.pi, "Yaw out of range"
         self.pitch = pitch
         self.yaw = yaw
         # calculate and store vertices in a dictionary
         self.vertices_d = {}
         self.vertices_d['E'] = np.array([coords[0], coords[1], coords[2]])
-        self.vertices_d['A'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(FOV_H/2 - self.pitch), self.vertices_d['E'][1] - coords[2]*np.tan(FOV_V/2 - self.yaw), 0))
-        self.vertices_d['B'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(FOV_H/2 + self.pitch), self.vertices_d['E'][1] - coords[2]*np.tan(FOV_V/2 - self.yaw), 0))
-        self.vertices_d['C'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(FOV_H/2 - self.pitch), self.vertices_d['E'][1] + coords[2]*np.tan(FOV_V/2 + self.yaw), 0))
-        self.vertices_d['D'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(FOV_H/2 + self.pitch), self.vertices_d['E'][1] + coords[2]*np.tan(FOV_V/2 + self.yaw), 0))
+        self.vertices_d['A'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(FOV_H/2 - self.pitch),
+                                         self.vertices_d['E'][1] - coords[2]*np.tan(FOV_V/2 - self.yaw), 0))
+        self.vertices_d['B'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(FOV_H/2 + self.pitch),
+                                         self.vertices_d['E'][1] - coords[2]*np.tan(FOV_V/2 - self.yaw), 0))
+        self.vertices_d['C'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(FOV_H/2 - self.pitch),
+                                         self.vertices_d['E'][1] + coords[2]*np.tan(FOV_V/2 + self.yaw), 0))
+        self.vertices_d['D'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(FOV_H/2 + self.pitch),
+                                         self.vertices_d['E'][1] + coords[2]*np.tan(FOV_V/2 + self.yaw), 0))
         # store vertices in a matrix
         self.vertices_m = np.zeros((5, 3))
         for idx, key in enumerate(self.vertices_d):
@@ -82,7 +88,7 @@ class Camera:
         n = np.cross(pq, pr)
         if verbose: print(f"plane equation: {n[0]:.2f}*x + {n[1]:.2f}*y + {n[2]:.2f}*z + {-n[0]*p1[0] - n[1]*p1[1] - n[2]*p1[2]:.2f} = 0")
         return np.array([n[0], n[1], n[2], -n[0]*p1[0] - n[1]*p1[1] - n[2]*p1[2]])
-    def _plane_from_points(p1, p2, p3):
+    def _plane_from_points(self, p1, p2, p3):
         pq, pr = p2 - p1, p3 - p1
         n = np.cross(pq, pr)
 
@@ -125,11 +131,25 @@ class Camera:
         ax.add_collection3d(Poly3DCollection(verts, alpha=0.5, linewidths=0.5, edgecolors='k'))
         return
 
-    def plot_plane(self, plane:str, ax, alpha=0.2) -> None:
-        assert type(plane)==str and len(plane)==3, "Wrong format for plane"
-        assert 'E' in plane, "Plane must contain the camera"
-        xx, yy, zz = self._plane_from_points(self.vertices_d[plane[0]], self.vertices_d[plane[1]], self.vertices_d[plane[2]])
+    def plot_plane(self, edges:str, ax, alpha=0.2) -> None:
+        assert type(edges)==str and len(edges)==3, "Wrong format for edges"
+        assert 'E' in edges, "Plane must contain the camera"
+        xx, yy, zz = self._edges_from_points(self.vertices_d[edges[0]], self.vertices_d[edges[1]], self.vertices_d[edges[2]])
         ax.plot_surface(xx, yy, zz, alpha=alpha)
+        return
+    
+    def plot_faces(self, ax, alpha=0.2) -> None:
+        verts = np.zeros((4, 3, 3))
+        for idx in range(4): verts[idx, 0, :] = self.vertices_d['E']
+        verts[0, 1, :] = self.vertices_d['A']
+        verts[0, 2, :] = self.vertices_d['B']
+        verts[1, 1, :] = self.vertices_d['B']
+        verts[1, 2, :] = self.vertices_d['D']
+        verts[2, 1, :] = self.vertices_d['C']
+        verts[2, 2, :] = self.vertices_d['D']
+        verts[3, 1, :] = self.vertices_d['A']
+        verts[3, 2, :] = self.vertices_d['C']
+        ax.add_collection3d(Poly3DCollection(verts, alpha=alpha, linewidths=0.5, edgecolors='k'))
         return
     
     def peekaboo(self, points:np.ndarray) -> np.ndarray:
@@ -230,9 +250,11 @@ class CameraOptimizer:
         if x0 is None: x0 = self.cameras
         sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
         args = (rho, False)
-        self.cameras, es = cma.fmin2(self.fitness, x0=x0, sigma0=sigma, args=args)
+        bounds = [self.N_CAMERAS*[self.X_RANGE[0], self.Y_RANGE[0], -0.49*np.pi, -0.49*np.pi],
+                  self.N_CAMERAS*[self.X_RANGE[1], self.Y_RANGE[1],  0.49*np.pi,  0.49*np.pi]]
+        self.cameras, es = cma.fmin2(self.fitness, x0, sigma, {'bounds': bounds}, args=args)
         while self.fitness()>fitness_upper_limit or self.fitness() is np.NaN:
-            self.cameras, es = cma.fmin2(self.fitness, x0=x0, sigma0=sigma, args=args)
+            self.cameras, es = cma.fmin2(self.fitness, x0, sigma, {'bounds': bounds}, args=args)
         return
 
     def save(self, path:str) -> None:
@@ -682,48 +704,48 @@ FOV_H = np.deg2rad(56)
 FOV_V = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
 X_LEN, Y_LEN = 5., 7.5 #meters
-N_CAMERAS = 4
+N_CAMERAS = 7
 CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 
 weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
 
 
-optim = SymmetricOptimizer('square', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
-# optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
-optim.set_random_cameras()
-optim.cameras_sym = np.load('good_4_sym.npy')
-optim._update()
-# optim.train(fitness_upper_limit=0.4)
+# optim = SymmetricOptimizer('square', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+# optim.set_random_cameras()
+# optim.train()
 # optim.save('results/test.npz')
-# optim.load('results/sym_circle_6.npz')
+optim.load('results/test.npz')
 # optim.fitness(verbose=True)
-
-'''Probapont mazsola'''
-probapont = np.array((0., 3.4, HEIGHT-.1)).reshape((1, 3))
+cameras_params = optim.cameras
 cameras = []
-camera_params = optim.cameras
 for i in range(optim.N_CAMERAS):
-    cameras.append(Camera((optim.cameras[4*i+0], optim.cameras[4*i+1], HEIGHT), optim.cameras[4*i+2], optim.cameras[4*i+3]))
+    cameras.append(Camera((cameras_params[4*i+0], cameras_params[4*i+1], HEIGHT), cameras_params[4*i+2], cameras_params[4*i+3]))
 
-see_it = []
-for cam in cameras:
-    see_it.append(cam.peekaboo(probapont)[0])
-print(see_it)
-cam = optim.cameras_sym
-cam[2:] = np.rad2deg(cam[2:])
-print(cam)
-# exit()
-
+mycam = cameras[3]
+yaw = -cameras[3].yaw - np.deg2rad(20)
+print(f"Yaw is {-np.rad2deg(yaw):.1f} degrees")
+d_x_coords = []
+pitch_degs = []
 fig = plt.figure()
-ax = fig.add_subplot(projection='3d')
+for idx, pitch in enumerate(np.linspace(0, mycam.pitch, 100)):
+    mycam = Camera(tuple(mycam.vertices_d['E']), pitch, yaw)
+    # if idx==75 or idx==76: print(np.rad2deg(pitch))
+    # print('{:.2f}'.format(mycam.vertices_d['D'][0]), end=', ')
+    d_x_coords.append(mycam.vertices_d['D'][0])
+    pitch_degs.append(np.rad2deg(pitch))
+    '''Plotting'''
+    ax = fig.add_subplot(projection='3d')
 
-plot_axes(ax, optim)
-# optim.plot_cameras(ax)
-# optim.plot_seen_points(ax)
+    plot_axes(ax, CameraOptimizer((0, 0), (4*X_LEN, 4*Y_LEN, HEIGHT), 0, 0))
+    mycam.plot_vertices(ax)
+    mycam.plot_faces(ax)
 
-cameras.append(Camera((1, 1, HEIGHT), 0, 0))
-for cam in cameras:
-    cam.plot_vertices(ax)
+    ax.view_init(elev=66, azim=-90)
+    plt.pause(0.2)
+    # plt.savefig(f"frames/{idx:03d}")
+    fig.clear()
+
 plt.show()
 
 print("Done!")
