@@ -203,9 +203,9 @@ class CameraOptimizer:
         params = np.random.rand(self.N_CAMERAS, 4)
         params[:, 0] = (self.X_RANGE[1]-self.X_RANGE[0])*params[:, 0]+self.X_RANGE[0] #scaling in x direction
         params[:, 1] = (self.Y_RANGE[1]-self.Y_RANGE[0])*params[:, 1]+self.Y_RANGE[0] #scaling in y direction
-        mypi = (1-EPS) * np.pi
-        angle_range_h =  (-mypi/2+self.FOV_H/2, mypi/2-self.FOV_H/2)
-        angle_range_v =  (-mypi/2+self.FOV_V/2, mypi/2-self.FOV_V/2)
+        _ = (1-EPS) * np.pi
+        angle_range_h =  (0.5*(self.FOV_H-_), 0.5*(_-self.FOV_H))
+        angle_range_v =  (0.5*(self.FOV_V-_), 0.5*(_-self.FOV_V))
         params[:, 2] = (angle_range_h[1]-angle_range_h[0])*params[:, 2]+angle_range_h[0] #scaling the pitch angles
         params[:, 3] = (angle_range_v[1]-angle_range_v[0])*params[:, 3]+angle_range_v[0] #scaling the yaw angles
         self.cameras = params.reshape(-1)
@@ -258,8 +258,9 @@ class CameraOptimizer:
         if x0 is None: x0 = self.cameras
         sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
         args = (rho, False)
-        bounds = [self.N_CAMERAS*[self.X_RANGE[0], self.Y_RANGE[0], -0.49*np.pi, -0.49*np.pi],
-                  self.N_CAMERAS*[self.X_RANGE[1], self.Y_RANGE[1],  0.49*np.pi,  0.49*np.pi]]
+        _ = (1-EPS) * np.pi
+        bounds = [self.N_CAMERAS*[self.X_RANGE[0], self.Y_RANGE[0], 0.5*(self.FOV_H-_), 0.5*(self.FOV_V-_)],
+                  self.N_CAMERAS*[self.X_RANGE[1], self.Y_RANGE[1],  0.5*(_-self.FOV_H),  0.5*(_-self.FOV_V)]]
         self.cameras, es = cma.fmin2(self.fitness, x0, sigma, {'bounds': bounds}, args=args)
         while self.fitness()>fitness_upper_limit or self.fitness() is np.NaN:
             self.cameras, es = cma.fmin2(self.fitness, x0, sigma, {'bounds': bounds}, args=args)
@@ -707,8 +708,8 @@ def plot_axes(ax, optim:CameraOptimizer) -> None:
     ax.set_title('Pyramid')
     return
 
-hfov = np.deg2rad(56)
-vfov = np.deg2rad(46)
+FOV_H = np.deg2rad(56)
+FOV_V = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
 X_LEN, Y_LEN = 5., 7.5 #meters
 N_CAMERAS = 7
@@ -716,24 +717,33 @@ CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 
 weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
 
-max_tilt, min_tilt = 0, 0
-optim = CameraOptimizer((hfov, vfov), (X_LEN, Y_LEN, HEIGHT), 10)
-for i in range(100):
-    optim.set_random_cameras()
-    max_tilt = max(max_tilt, np.max(optim.cameras.reshape((-1, 4))[:, 2]))
-    min_tilt = min(min_tilt, np.min(optim.cameras.reshape((-1, 4))[:, 2]))
+# optim = SymmetricOptimizer('square', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+# optim.set_random_cameras()
+# optim.train()
+# optim.save('results/test.npz')
+optim.load('results/test.npz')
+# optim.fitness(verbose=True)
+cameras_params = optim.cameras
+cameras = []
+for i in range(optim.N_CAMERAS):
+    cameras.append(Camera((cameras_params[4*i+0], cameras_params[4*i+1], HEIGHT), (cameras_params[4*i+2], cameras_params[4*i+3]), (FOV_H, FOV_V)))
 
-print(np.rad2deg((hfov/2+max_tilt)/(1-EPS)))
-print(np.rad2deg((-hfov/2+min_tilt)/(1-EPS)))
 
-# mycam = Camera((0.5, 1.5, HEIGHT), (np.deg2rad(60), np.deg2rad(-65)), (FOV_H, FOV_V))
+fig = plt.figure()
+for idx, cam in enumerate(cameras):
+    ax = fig.add_subplot(projection='3d')
 
-# fig = plt.figure()
-# ax = fig.add_subplot(projection='3d')
+    # plot_axes(ax, CameraOptimizer((0, 0), (4*X_LEN, 4*Y_LEN, HEIGHT), 0, 0))
+    plot_axes(ax, optim)
+    cam.plot_vertices(ax)
+    cam.plot_faces(ax)
 
-# plot_axes(ax, CameraOptimizer((0, 0), (4*X_LEN, 4*Y_LEN, HEIGHT), 0, 0))
-# mycam.plot_faces(ax)
+    ax.view_init(elev=66, azim=-90)
+    plt.pause(5.)
+    # plt.savefig(f"frames/{idx:03d}")
+    fig.clear()
 
-# plt.show()
+plt.show()
 
 print("Done!")
