@@ -47,7 +47,7 @@ class Camera:
         pitch (float): pitch angle of the camera in radians
         yaw (float): yaw angle of the camera in radians
     '''
-    def __init__(self, coords:tuple, tilt:Tuple[float], fov:Tuple[float]) -> None:
+    def __init__(self, coords:Tuple[float], tilt:Tuple[float], fov:Tuple[float]) -> None:
         assert type(coords)==tuple and len(coords)==3, "Wrong format for coords"
         assert type(tilt)==tuple and len(tilt)==2, "Wrong format for tilt"
         assert type(fov)==tuple and len(fov)==2, "Wrong format for fov"
@@ -494,15 +494,20 @@ class SymmetricOptimizer(CameraOptimizer):
             self._update()
         return
 
-    def fitness(self, cameras_arr=None, rho=4, verbose=False) -> float:
-        # self._update()
-        return super().fitness(self.cameras if cameras_arr is None else cameras_arr, rho, verbose)
+    # def fitness(self, cameras_arr=None, rho=4, verbose=False) -> float:
+    #     self._update()
+    #     return super().fitness(self.cameras if cameras_arr is None else cameras_arr, rho, verbose)
 
     def train(self, rho=4.0, fitness_upper_limit=0.9) -> None:
-        while self.fitness()>fitness_upper_limit or self.fitness() is np.NaN:
+        while self.fitness()>fitness_upper_limit:# or self.fitness() is np.NaN:
             super().train(self.cameras_sym, rho, fitness_upper_limit=1e3)
             self.cameras_sym = self.cameras
             self._update()
+            print(self.fitness())
+            # print(self.n_cameras_sym, self.N_CAMERAS)
+            # print(self.cameras_sym.reshape((-1, 4)))
+            # print(self.cameras.reshape((-1, 4)))
+            # exit()
         return
 
     def save(self, path:str) -> None:
@@ -527,135 +532,53 @@ class SymmetricOptimizer(CameraOptimizer):
         return
 
 class WeightedSymmetricOptimizer(WeightedOptimizer):
-    def __init__(self, weights, symmetry, fov: Tuple[float], dims: Tuple[float], n_cameras: int, cam_r:float=0., verbose:bool=False) -> None:
+    def __init__(self, weights, symmetry, fov:Tuple[float], dims:Tuple[float], n_cameras:int, cam_r:float=0., verbose:bool=False) -> None:
+        # symmetry
         assert type(symmetry)==str, "symmetry parameter must be a string"
         assert symmetry=='circle' or symmetry=='square', "Possible values for symmetry parameter are 'circle' and 'square'"
+        self.symmetry = symmetry
+        # n_cameras
         if symmetry=='circle':
             if n_cameras%2 != 0:
                 print(f"Number of cameras must be divisible by 2. Changing number of cameras to {n_cameras - n_cameras%2}")
             n_free_cams = n_cameras // 2
+            n = n_free_cams*2
         if symmetry=='square':
             if n_cameras%4 != 0:
                 print(f"Number of cameras must be divisible by 4. Changing number of cameras to {n_cameras - n_cameras%4}")
             n_free_cams = n_cameras // 4
+            n = n_free_cams*4
         if n_free_cams==0: raise Exception("Number of cameras is too low for this symmetry parameter.")
-        self.symmetry = symmetry
-        super().__init__(weights, fov, dims, n_free_cams, cam_r, verbose)
+        super().__init__(weights, fov, dims, n, cam_r, verbose)
+        self.n_cameras_sym = n_free_cams
+        # cameras
+        # self.cameras initialised by super's init
+        self.cameras_sym = None
         return
     
-    def fitness1(self, camera_params:np.ndarray, rho:float, verbose=False) -> float:
-        minimize = True
-        axes_limits = self.ALL_RANGE
-        weighing_dict = self.weights
-        symmetry = self.symmetry
-        assert len(camera_params)%4==0
-        assert len(axes_limits)==6, "axes_limits must be a tuple with length 6"
-        assert weighing_dict is not None, "weighing dict parameter must be given"
-        camera_params = symmetric_params2regular_params(camera_params, symmetry)
-        x_min, x_max, y_min, y_max, z_min, z_max = axes_limits
-        cameras = []
-        for i in range(0, len(camera_params), 4):
-            # build cameras
-            cameras.append(Camera((camera_params[i+0], camera_params[i+1], self.Z_RANGE[1]), (camera_params[i+2], camera_params[i+3]), (self.FOV_H, self.FOV_V)))
-        n_cams = len(cameras)
-        if weighing_dict['stay_within_range']>=0:
-            x_min, x_max, y_min, y_max = (1+weighing_dict['stay_within_range'])*np.array(axes_limits[:-2])
-            assert np.allclose(np.zeros(2), np.array((x_min+x_max, y_min+y_max))), "The 'stay_within_range' funcitonality assumes that the origin of the x-y plane is at (0, 0)"
-            for cam in cameras:
-                if not (np.logical_and(x_min<cam.vertices_m[:, 0], cam.vertices_m[:, 0]<x_max).all() and np.logical_and(y_min<cam.vertices_m[:, 1], cam.vertices_m[:, 1]<y_max).all()):
-                    return np.NaN
-            x_min, x_max, y_min, y_max, z_min, z_max = axes_limits
-        assert x_min<x_max and y_min<y_max and z_min<z_max, "minimum values must be strictly smaller than maximum values"
-        if minimize:# if training (minimize=True), enforce that cameras are not to be too close to one another
-            for i in range(n_cams-1):
-                for j in range(i+1, n_cams):
-                    if np.linalg.norm(cameras[i].vertices_d['E']-cameras[j].vertices_d['E']) < 2*CAM_SIZE:
-                        if verbose: print("solution rejected: cameras too close")
-                        return np.NaN
-        # generate test-points
-        xx, yy, zz = np.meshgrid(np.linspace(x_min, x_max, int(rho*(x_max-x_min))),
-                                np.linspace(y_min, y_max, int(rho*(y_max-y_min))),
-                                np.linspace(z_min, z_max, int(rho*(z_max-z_min))))
-        n_points = np.prod(xx.shape)
-        test_point_set = np.stack((xx.reshape(-1), yy.reshape(-1), zz.reshape(-1)), axis=1)
-        # every row of mask_mat corresponds to a camera and every column to a test-point if i_th camera sees j_th point then mask_mat[i, j]==True
-        mask_mat = np.zeros((n_cams, n_points), dtype=bool)
-        for cam_idx, cam in enumerate(cameras):
-            assert type(cam)==Camera, "All element of 'cameras' must be of type 'Camera'"
-            mask_mat[cam_idx, :] = cam.peekaboo(test_point_set)
-        mask_seen_by_three = np.zeros(n_points, dtype=bool)
-        for idx in range(n_points):
-            mask_seen_by_three[idx] = np.sum(mask_mat[:, idx])>=3 #mask_seen_by_three is a n_points long vector of bools, where a True value in the ith position means it was seen by at least 3 cameras
-
-        result = 0
-        max_result = 0
-        # weigh each point according to how far it is from the origin
-        # a: how strongly this weighing should be considered within the point-by-point basis weights; b: how strongly should proximity to origin be favored
-        if type(weighing_dict['distance_from_origin']) == float:
-            if weighing_dict['distance_from_origin']>0:
-                a = weighing_dict['distance_from_origin']
-                b = 1
-                weights = 1/(1 + b*np.linalg.norm(test_point_set, axis=1))
-                result += a * np.sum(weights*mask_seen_by_three)/np.sum(weights) 
-                max_result += a
-        elif type(weighing_dict['distance_from_origin']) == tuple:
-            if np.all(np.array(weighing_dict['distance_from_origin'])>0):
-                assert len(weighing_dict['distance_from_origin'])==2, "If the distance form origin parameter is a tuple, it must be of length 2."
-                a, b = weighing_dict['distance_from_origin']
-                weights = 1/(1 + b*np.linalg.norm(test_point_set, axis=1))
-                result += a * np.sum(weights*mask_seen_by_three)/np.sum(weights) 
-                max_result += a
-        else: raise Exception("Distance form origin parameter must be a float or a tuple of length 2.")
-
-        # couldn't figure out a way to normalise spread, therefore this functionality will break the 0-1 range of the fitness funciton. To somehow make it still scale by the space, I divide by the x and y size of the space
-        if weighing_dict['spread']>0:
-            cam_positions = np.zeros((n_cams, 2))
-            for i in range(n_cams):# build cameras
-                cam_positions[i, 0] = camera_params[4*i]
-                cam_positions[i, 1] = camera_params[4*i+1]
-            centroid = np.mean(cam_positions, axis=0)
-            distances = np.linalg.norm(np.stack((cam_positions[:, 0]-centroid[0], cam_positions[:, 1]-centroid[1])), axis=0)
-            max_distance_sum = (x_max-x_min)*(y_max-y_min) #not really the maximum spread, but this value should at least scale with the space
-            result += weighing_dict['spread'] * np.sum(distances)/max_distance_sum
-            max_result += weighing_dict['spread']
-
-        if weighing_dict['soft_convexity'] > 0 or weighing_dict['hard_convexity'] > 0:
-            test_points_seen = test_point_set[mask_seen_by_three]
-            try:
-                hull = ConvexHull(test_points_seen)
-            except:
-                # print('Convex hull could not be computed')
-                # HULL_FAIL = HULL_FAIL + 1
-                return np.NaN
-            triangulation = Delaunay(test_points_seen[hull.vertices])
-            mask_inside_hull = triangulation.find_simplex(test_point_set) >= 0 #mask for points inside the hull
-            n_points_in_hull_not_seen = np.sum(np.logical_and(mask_inside_hull, ~mask_seen_by_three))
-            n_seen = np.sum(mask_seen_by_three)
-            convexity_ratio = n_seen/(n_seen+n_points_in_hull_not_seen)
-            assert 0 <= convexity_ratio <= 1, "Something is not right: convexity ratio out of range"
-            # soft convexity
-            if weighing_dict['soft_convexity'] > 0:
-                result += weighing_dict['soft_convexity']*convexity_ratio
-                max_result += weighing_dict['soft_convexity']
-            # hard convexity
-            if weighing_dict['hard_convexity'] > 0:
-                assert weighing_dict['hard_convexity'] < 1, "hard_convexity parameter must be strictly less than 1.0 (ideally below 0.95)"
-                if convexity_ratio < weighing_dict['hard_convexity']: return np.NaN #reject every solution that is below the hard limit
-
-        if verbose: print(f'The cameras see {100*np.sum(mask_seen_by_three)/n_points:.1f}% of points')
-
-        # every weghing parameter is turned off
-        if max_result == 0:
-            result = np.sum(mask_seen_by_three)/n_points
-            max_result = 1
-        
-        return 1 - result/max_result if minimize else result/max_result
-
-    def train(self, rho=4.0) -> None:
-        self.rho = rho
-        sigma = 0.5 * 1/4*(self.X_RANGE[1]-self.X_RANGE[0]) #"``sigma0`` should be about 1/4th of the search domain width"
-        args = (rho, False)
-        self.cameras, es = cma.fmin2(self.fitness1, x0=self.cameras, sigma0=sigma, args=args)
+    def _update(self):
+        assert len(self.cameras_sym) == 4*self.n_cameras_sym, "Bad size for symmetric cameras."
+        self.cameras = symmetric_params2regular_params(self.cameras_sym, self.symmetry)
+        return
+    
+    def set_random_cameras(self) -> None:
+        super().set_random_cameras()
+        self.cameras_sym = self.cameras[:4*self.n_cameras_sym]
+        self._update()
+        while self.fitness() is np.NaN:
+            super().set_random_cameras()
+            self.cameras_sym = self.cameras[:4*self.n_cameras_sym]
+            self._update()
+        return
+    
+    def train(self, rho=4.0, fitness_upper_limit=0.9) -> None:
+        print('here1')
+        while self.fitness()>fitness_upper_limit or self.fitness() is np.NaN:
+            print('here2')
+            super().train(self.cameras_sym, rho, fitness_upper_limit=1e3)
+            self.cameras_sym = self.cameras
+            self._update()
+        print('here3')
         return
 
     def save(self, path:str) -> None:
@@ -684,10 +607,26 @@ class WeightedSymmetricOptimizer(WeightedOptimizer):
         self.CAMERA_RADIUS = data['metadata'][9]
         self.rho = data['metadata'][10]
         self.hull_fail_counter = data['metadata'][11]
-
         self.cameras = data['cameras']
+
+        self.n_cameras_sym = self.N_CAMERAS // (2 if self.symmetry=='circle' else 4)
+        self.cameras_sym = self.cameras[np.array(self.n_cameras_sym*[4*[1]+4*[0]], dtype=bool).reshape(-1)] if self.symmetry=='circle' else self.cameras[np.array(self.n_cameras_sym*[4*[1]+12*[0]], dtype=bool).reshape(-1)]
+        assert np.array_equal(self.cameras, symmetric_params2regular_params(self.cameras_sym, self.symmetry)), "Error during loading"
         return
 
+def blank_optimizer(optimizer:str='CameraOptimizer') -> CameraOptimizer:
+    possible_inputs= ['CameraOptimizer', 'WeightedOptimizer', 'SymmetricOptimizer', 'WeightedSymmetricOptimizer']
+    weights = {'distance_from_origin': -1., 'stay_within_range': -1., 'spread': -1., 'soft_convexity': -1., 'hard_convexity': -1.}
+    if   optimizer==possible_inputs[0]:
+        return CameraOptimizer((0, 0), (0, 0, 0), -2, 0., False)
+    elif optimizer==possible_inputs[1]:
+        return WeightedOptimizer(weights, (0, 0), (0, 0, 0), -2, 0., False)
+    elif optimizer==possible_inputs[2]:
+        return SymmetricOptimizer('circle', (0, 0), (0, 0, 0), -2, 0., False)
+    elif optimizer==possible_inputs[3]:
+        return WeightedSymmetricOptimizer(weights, 'circle', (0, 0), (0, 0, 0), -2, 0., False)
+    else:
+        raise ValueError(f'Bad value for optimizer.\nPossible inputs are {possible_inputs}.')
 
 def plot_axes(ax, optim:CameraOptimizer) -> None:
     ax.plot(optim.X_RANGE, [0, 0], [0, 0], color='red')
@@ -705,45 +644,82 @@ def plot_axes(ax, optim:CameraOptimizer) -> None:
     ax.set_ylim3d(ymin, ymax)
     zmin, zmax = optim.Z_RANGE
     ax.set_zlim3d(zmin, zmax)
-    ax.set_title('Pyramid')
+    # ax.set_title('Pyramid')
     return
 
 FOV_H = np.deg2rad(56)
 FOV_V = np.deg2rad(46)
 HEIGHT = 3. #meters (measured: 295 cm)
 X_LEN, Y_LEN = 5., 7.5 #meters
-N_CAMERAS = 7
+N_CAMERAS = 14
 CAM_SIZE = 0.3   # upper limit measured is about 30 cm
 
-weights = {'distance_from_origin': (0.5, 1.0), 'stay_within_range': 1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': 0.4}
+weights = {'distance_from_origin': 3.0, 'stay_within_range': -1.0, 'spread': -1.0, 'soft_convexity': 2.0, 'hard_convexity': -0.4}
 
-# optim = SymmetricOptimizer('square', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
-optim = CameraOptimizer((FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
-# optim.set_random_cameras()
-# optim.train()
-# optim.save('results/test.npz')
-optim.load('results/test.npz')
-# optim.fitness(verbose=True)
-cameras_params = optim.cameras
-cameras = []
-for i in range(optim.N_CAMERAS):
-    cameras.append(Camera((cameras_params[4*i+0], cameras_params[4*i+1], HEIGHT), (cameras_params[4*i+2], cameras_params[4*i+3]), (FOV_H, FOV_V)))
+'''Train'''
+if False:
+    optim = SymmetricOptimizer('circle', (FOV_H, FOV_V), (X_LEN, Y_LEN, HEIGHT), N_CAMERAS, CAM_SIZE)
+    optim.set_random_cameras()
+    optim.train(2, fitness_upper_limit=0.5)
+    optim.save('results/symmetric14.npz')
+    print(f'Fitness value: {optim.fitness(verbose=True)}')
+    exit()
+'''Evaluate'''
+
+optim_ize = blank_optimizer()
+optim_ize.load('results/vanilla14.npz')
+print(f"vanilla: {optim_ize.fitness(verbose=True)}")
+fig_ize = plt.figure()
+ax_ize = fig_ize.add_subplot(projection='3d')
+plot_axes(ax_ize, optim_ize)
+optim_ize.plot_cameras(ax_ize)
+optim_ize.plot_seen_points(ax_ize)
 
 
-fig = plt.figure()
-for idx, cam in enumerate(cameras):
-    ax = fig.add_subplot(projection='3d')
 
-    # plot_axes(ax, CameraOptimizer((0, 0), (4*X_LEN, 4*Y_LEN, HEIGHT), 0, 0))
-    plot_axes(ax, optim)
-    cam.plot_vertices(ax)
-    cam.plot_faces(ax)
+optim_w = blank_optimizer('WeightedOptimizer')
+optim_w.load('results/weigted14.npz')
+print(f"weighted: {optim_w.fitness(verbose=True)}")
+fig_w = plt.figure()
+ax_w = fig_w.add_subplot(projection='3d')
+plot_axes(ax_w, optim_w)
+optim_w.plot_cameras(ax_w)
+optim_w.plot_seen_points(ax_w)
 
-    ax.view_init(elev=66, azim=-90)
-    plt.pause(5.)
-    # plt.savefig(f"frames/{idx:03d}")
-    fig.clear()
 
+optim_v = blank_optimizer('SymmetricOptimizer')
+optim_v.load('results/symmetric14.npz')
+print(f"symmetric: {optim_v.fitness(verbose=True)}")
+fig_v = plt.figure()
+ax_v = fig_v.add_subplot(projection='3d')
+plot_axes(ax_v, optim_v)
+optim_v.plot_cameras(ax_v)
+optim_v.plot_seen_points(ax_v)
+
+optim_s = blank_optimizer('WeightedSymmetricOptimizer')
+optim_s.load('results/weigtedsym14.npz')
+print(f"weigtedsym: {optim_s.fitness(verbose=True)}")
+fig_s = plt.figure()
+ax_s = fig_s.add_subplot(projection='3d')
+plot_axes(ax_s, optim_s)
+optim_s.plot_cameras(ax_s)
+optim_s.plot_seen_points(ax_s)
+
+percents = 4*[None]
+percent_calc = blank_optimizer()
+percent_calc.load('results/vanilla14.npz')
+percents[3] = (100*(1-percent_calc.fitness()))
+percent_calc.cameras = optim_v.cameras
+percents[0] = (100*(1-percent_calc.fitness()))
+percent_calc.cameras = optim_w.cameras
+percents[1] = (100*(1-percent_calc.fitness()))
+percent_calc.cameras = optim_s.cameras
+percents[2] = (100*(1-percent_calc.fitness()))
+
+ax_v.set_title(f'Symmetric\n{percents[0]:.0f}%')
+ax_w.set_title(f'Weighted\n{percents[1]:.0f}%')
+ax_s.set_title(f'Weighed Symmetric\n{percents[2]:.0f}%')
+ax_ize.set_title(f'Vanilla\n{percents[3]:.0f}%')
 plt.show()
 
 print("Done!")
