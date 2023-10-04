@@ -9,7 +9,8 @@ from time import time
 from typing import Tuple
 import numpy as np, matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from scipy.spatial import ConvexHull, Delaunay
+from scipy.spatial import ConvexHull, Delaunay, transform
+
 import cma
 
 np.set_printoptions(precision=3, suppress=True)
@@ -49,6 +50,14 @@ def symmetric_params2regular_params(camera_params:np.ndarray, symmetry:str) -> n
     else:
         raise Exception(f"Incorrect symmetry parameter: {symmetry}")
 
+def get_random_points(xrange:Tuple[float], yrange:Tuple[float], zrange:Tuple[float], n:int=500):
+    assert len(xrange)==len(yrange) and len(zrange)==len(yrange) and len(xrange)==2
+    result = np.hstack((
+        np.random.rand(n, 1)*abs(xrange[1]-xrange[0]) + min(xrange[1], xrange[0]),
+        np.random.rand(n, 1)*abs(yrange[1]-yrange[0]) + min(yrange[1], yrange[0]),
+        np.random.rand(n, 1)*abs(zrange[1]-zrange[0]) + min(zrange[1], zrange[0])
+        ))
+    return result
 
 class Camera:
     '''
@@ -73,16 +82,21 @@ class Camera:
         assert 2*np.abs(self.pitch) < _-self.fov_h, "Pitch out of range"
         assert 2*np.abs(self.yaw) < _-self.fov_v, "Yaw out of range"
         # calculate and store vertices in a dictionary
+            # Compute in local coordinates
         self.vertices_d = {}
-        self.vertices_d['E'] = np.array([coords[0], coords[1], coords[2]])
-        self.vertices_d['A'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(self.fov_h/2 - self.pitch),
-                                         self.vertices_d['E'][1] - coords[2]*np.tan(self.fov_v/2 - self.yaw), 0))
-        self.vertices_d['B'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(self.fov_h/2 + self.pitch),
-                                         self.vertices_d['E'][1] - coords[2]*np.tan(self.fov_v/2 - self.yaw), 0))
-        self.vertices_d['C'] = np.array((self.vertices_d['E'][0] - coords[2]*np.tan(self.fov_h/2 - self.pitch),
-                                         self.vertices_d['E'][1] + coords[2]*np.tan(self.fov_v/2 + self.yaw), 0))
-        self.vertices_d['D'] = np.array((self.vertices_d['E'][0] + coords[2]*np.tan(self.fov_h/2 + self.pitch),
-                                         self.vertices_d['E'][1] + coords[2]*np.tan(self.fov_v/2 + self.yaw), 0))
+        self.vertices_d['A'] = np.array([coords[2] * np.tan(self.fov_h/2), coords[2] * np.tan(self.fov_v/2),
+                                       -coords[2]])
+        self.vertices_d['B'] = np.array([-coords[2] * np.tan(self.fov_h/2), coords[2] * np.tan(self.fov_v/2),
+                                       -coords[2]])
+        self.vertices_d['C'] = np.array([-coords[2] * np.tan(self.fov_h/2), -coords[2] * np.tan(self.fov_v/2),
+                                       -coords[2]])
+        self.vertices_d['D'] = np.array([coords[2] * np.tan(self.fov_h/2), -coords[2] * np.tan(self.fov_v/2),
+                                       -coords[2]])
+        self.vertices_d['E'] = np.array([0, 0, 0])
+            # Rotate around point E by pitch and yaw, then apply translation by x, y, z
+        rot_mat = transform.Rotation.from_euler('xyz', np.array([0, self.pitch, self.yaw])).as_matrix()
+        for key in self.vertices_d:
+            self.vertices_d[key] = rot_mat @ self.vertices_d[key] + np.array(coords)
         # store vertices in a matrix
         self.vertices_m = np.zeros((5, 3))
         for idx, key in enumerate(self.vertices_d):
@@ -90,9 +104,9 @@ class Camera:
         # calculate and store planes in a dictionary
         self.planes_d = {}
         self.planes_d['ABE'] = self._coefficients_from_points(self.vertices_d['A'], self.vertices_d['B'], self.vertices_d['E'])
-        self.planes_d['BDE'] = self._coefficients_from_points(self.vertices_d['B'], self.vertices_d['D'], self.vertices_d['E'])
+        self.planes_d['BCE'] = self._coefficients_from_points(self.vertices_d['B'], self.vertices_d['C'], self.vertices_d['E'])
         self.planes_d['CDE'] = self._coefficients_from_points(self.vertices_d['C'], self.vertices_d['D'], self.vertices_d['E'])
-        self.planes_d['ACE'] = self._coefficients_from_points(self.vertices_d['A'], self.vertices_d['C'], self.vertices_d['E'])
+        self.planes_d['DAE'] = self._coefficients_from_points(self.vertices_d['D'], self.vertices_d['A'], self.vertices_d['E'])
         self.planes_d['ABC'] = self._coefficients_from_points(self.vertices_d['A'], self.vertices_d['B'], self.vertices_d['C'])
     def _coefficients_from_points(self, p1:np.ndarray, p2=None, p3=None, verbose=False) -> np.ndarray:
         '''
@@ -139,9 +153,9 @@ class Camera:
         -------
             None
         '''
-        ax.scatter(self.vertices_m[:, 0], self.vertices_m[:, 1], self.vertices_m[:, 2], color=color, alpha=alpha)
-        for idx, key in enumerate(self.vertices_d):
-            ax.text(self.vertices_m[idx, 0], self.vertices_m[idx, 1], self.vertices_m[idx, 2], key)
+        # ax.scatter(self.vertices_m[:, 0], self.vertices_m[:, 1], self.vertices_m[:, 2], color=color, alpha=alpha)
+        # for idx, key in enumerate(self.vertices_d):
+        #     ax.text(self.vertices_m[idx, 0], self.vertices_m[idx, 1], self.vertices_m[idx, 2], key)
         # plot triangles showing the direction of the camera
         # collect vectors for the triangles
         triangle_sidelength = 0.7
@@ -158,12 +172,12 @@ class Camera:
         for idx in range(4): verts[idx, 0, :] = self.vertices_d['E']
         verts[0, 1, :] = self.vertices_d['E'] + triangle_sidelength*a_vec
         verts[0, 2, :] = self.vertices_d['E'] + triangle_sidelength*b_vec
-        verts[1, 1, :] = self.vertices_d['E'] + triangle_sidelength*a_vec
+        verts[1, 1, :] = self.vertices_d['E'] + triangle_sidelength*b_vec
         verts[1, 2, :] = self.vertices_d['E'] + triangle_sidelength*c_vec
-        verts[2, 1, :] = self.vertices_d['E'] + triangle_sidelength*d_vec
-        verts[2, 2, :] = self.vertices_d['E'] + triangle_sidelength*b_vec
+        verts[2, 1, :] = self.vertices_d['E'] + triangle_sidelength*c_vec
+        verts[2, 2, :] = self.vertices_d['E'] + triangle_sidelength*d_vec
         verts[3, 1, :] = self.vertices_d['E'] + triangle_sidelength*d_vec
-        verts[3, 2, :] = self.vertices_d['E'] + triangle_sidelength*c_vec
+        verts[3, 2, :] = self.vertices_d['E'] + triangle_sidelength*a_vec
         ax.add_collection3d(Poly3DCollection(verts, alpha=0.5, linewidths=0.5, edgecolors='k'))
         return
 
@@ -194,11 +208,11 @@ class Camera:
         verts[0, 1, :] = self.vertices_d['A']
         verts[0, 2, :] = self.vertices_d['B']
         verts[1, 1, :] = self.vertices_d['B']
-        verts[1, 2, :] = self.vertices_d['D']
+        verts[1, 2, :] = self.vertices_d['C']
         verts[2, 1, :] = self.vertices_d['C']
         verts[2, 2, :] = self.vertices_d['D']
-        verts[3, 1, :] = self.vertices_d['A']
-        verts[3, 2, :] = self.vertices_d['C']
+        verts[3, 1, :] = self.vertices_d['D']
+        verts[3, 2, :] = self.vertices_d['A']
         ax.add_collection3d(Poly3DCollection(verts, alpha=alpha, linewidths=0.5, edgecolors='k'))
         return
     
@@ -219,12 +233,12 @@ class Camera:
         assert len(points.shape)==2 and points.shape[1]==3, f'Badly shaped input ({points.shape} instead of (n, 3))'
         theta = self.planes_d['ABE']
         result = theta[0]*points[:, 0] + theta[1]*points[:, 1] + theta[2]*points[:, 2] + theta[3] < 0
-        theta = self.planes_d['BDE']
+        theta = self.planes_d['BCE']
         result = np.logical_and(result, theta[0]*points[:, 0] + theta[1]*points[:, 1] + theta[2]*points[:, 2] + theta[3] < 0)
         theta = self.planes_d['CDE']
-        result = np.logical_and(result, theta[0]*points[:, 0] + theta[1]*points[:, 1] + theta[2]*points[:, 2] + theta[3] > 0)
-        theta = self.planes_d['ACE']
-        result = np.logical_and(result, theta[0]*points[:, 0] + theta[1]*points[:, 1] + theta[2]*points[:, 2] + theta[3] > 0)
+        result = np.logical_and(result, theta[0]*points[:, 0] + theta[1]*points[:, 1] + theta[2]*points[:, 2] + theta[3] < 0)
+        theta = self.planes_d['DAE']
+        result = np.logical_and(result, theta[0]*points[:, 0] + theta[1]*points[:, 1] + theta[2]*points[:, 2] + theta[3] < 0)
         return np.logical_and(result, points[:, 2]>=0)
 
 class CameraOptimizer:
